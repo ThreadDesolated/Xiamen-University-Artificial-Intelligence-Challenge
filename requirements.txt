@@ -1,0 +1,22 @@
+# —— 核心（demo/smoke 只需要这两个）——
+numpy>=1.26
+pandas>=2.0
+
+# —— W2 起：真实实验执行内核 ——
+scikit-learn>=1.4
+flaml>=2.1
+
+# —— W2 起：Agent 编排（断点续跑 / 人工审核 / 状态可视化）——
+langgraph>=0.2
+
+# —— W2 起：服务与调用链面板后端（SSE）——
+fastapi>=0.110
+uvicorn[standard]>=0.29
+sse-starlette>=2.0
+
+# —— 工程 ——
+python-dotenv>=1.0
+pytest>=8.0
+
+# —— 可选：小图像/时序任务需要（CPU 版，按机器情况安装）——
+# torch>=2.2 --index-url https://download.pytorch.org/whl/cpu

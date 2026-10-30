@@ -1,0 +1,3 @@
+# 最小运行依赖：demo / smoke test / 回放只需要这两个
+numpy>=1.26
+pandas>=2.0

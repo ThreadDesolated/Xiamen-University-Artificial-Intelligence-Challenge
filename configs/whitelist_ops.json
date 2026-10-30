@@ -1,0 +1,84 @@
+{
+  "schema_version": "0.1.0",
+  "desc": "动作空间白名单：方案 JSON 只允许引用这里的算子/模型及其参数范围",
+  "ops": {
+    "impute_mean": {
+      "desc": "用训练集均值填数值列缺失值",
+      "params": {}
+    },
+    "impute_median": {
+      "desc": "用训练集中位数填数值列缺失值",
+      "params": {}
+    },
+    "impute_zero": {
+      "desc": "用 0 填充缺失值",
+      "params": {}
+    },
+    "drop_missing_rows": {
+      "desc": "删除含缺失值的训练行（评估仍用完整测试集）",
+      "params": {}
+    },
+    "scale_standard": {
+      "desc": "标准化（减均值除标准差），只用训练集统计量",
+      "params": {}
+    },
+    "onehot": {
+      "desc": "类别列独热编码（未知类别全 0）",
+      "params": {
+        "max_categories": {
+          "type": "int",
+          "min": 2,
+          "max": 100,
+          "default": 20,
+          "desc": "单列最多保留的类别数，超出归入 __other__"
+        }
+      }
+    },
+    "variance_filter": {
+      "desc": "删除方差过低的数值列",
+      "params": {
+        "threshold": {
+          "type": "float",
+          "min": 0.0,
+          "max": 0.5,
+          "default": 0.0,
+          "desc": "方差阈值（0 表示只删常量列）"
+        }
+      }
+    },
+    "log1p": {
+      "desc": "对非负列做 log1p 变换",
+      "params": {}
+    }
+  },
+  "models": {
+    "nearest_centroid": {
+      "desc": "最近质心分类器（弱 baseline，用于演示失败归因）",
+      "tasks": ["binary_classification", "multiclass_classification"],
+      "params": {}
+    },
+    "logistic_gd": {
+      "desc": "numpy 实现的 L2 逻辑回归（梯度下降），支持 balanced 类别权重",
+      "tasks": ["binary_classification", "multiclass_classification"],
+      "params": {
+        "lr": {"type": "float", "min": 0.001, "max": 1.0, "default": 0.1},
+        "epochs": {"type": "int", "min": 50, "max": 2000, "default": 300},
+        "l2": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.001},
+        "class_weight": {"type": "enum", "values": ["none", "balanced"], "default": "none"}
+      }
+    },
+    "linear_gd": {
+      "desc": "numpy 实现的线性回归（梯度下降），用于回归任务",
+      "tasks": ["regression"],
+      "params": {
+        "lr": {"type": "float", "min": 0.001, "max": 1.0, "default": 0.05},
+        "epochs": {"type": "int", "min": 50, "max": 2000, "default": 300},
+        "l2": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.001}
+      }
+    }
+  },
+  "limits": {
+    "max_ops": 8,
+    "max_plan_bytes": 20000
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "t1_demo",
+  "name": "内置合成任务：缺失值 + 类别失衡的表格二分类（离线演示）",
+  "task_type": "binary_classification",
+  "data_path": "synthetic:t1",
+  "target": "label",
+  "metric": "accuracy",
+  "threshold": 0.85,
+  "higher_is_better": true,
+  "n_splits": 5,
+  "seed": 42,
+  "budget_seconds": 60,
+  "max_rounds": 3,
+  "notes": "零依赖可跑；用于 W1 验收与断网兜底演示"
+}

@@ -1,0 +1,15 @@
+{
+  "task_id": "t3_timeseries",
+  "name": "公开时序回归（滑窗特征 + 线性/树模型，1-2k 点）",
+  "task_type": "regression",
+  "data_path": "data/processed/t3_timeseries.csv",
+  "target": "target",
+  "metric": "mae",
+  "threshold": 0.15,
+  "higher_is_better": false,
+  "n_splits": 5,
+  "seed": 42,
+  "budget_seconds": 120,
+  "max_rounds": 3,
+  "notes": "预置失败点：未差分 / 滑窗泄漏；先运行 python -m autolab prepare --task t3_timeseries"
+}

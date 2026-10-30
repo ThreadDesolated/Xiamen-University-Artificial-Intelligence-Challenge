@@ -1,0 +1,15 @@
+{
+  "task_id": "t1_adult",
+  "name": "UCI Adult 收入二分类（固定子集 1000 行）",
+  "task_type": "binary_classification",
+  "data_path": "data/processed/t1_adult.csv",
+  "target": "income",
+  "metric": "accuracy",
+  "threshold": 0.85,
+  "higher_is_better": true,
+  "n_splits": 5,
+  "seed": 42,
+  "budget_seconds": 120,
+  "max_rounds": 3,
+  "notes": "预置失败点：缺失值未处理 + 类别失衡；先运行 python -m autolab prepare --task t1_adult"
+}
