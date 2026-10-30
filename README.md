@@ -3,6 +3,9 @@
 > 第六届厦门大学人工智能挑战赛 · 赛道二（AI 智能体创新赛）
 > 队伍：**泥虾** ｜ 队长：陈传轩 ｜ 队员：张一鸣、陈景祥、张谋谆
 
+**仓库**：[ThreadDesolated/Xiamen-University-Artificial-Intelligence-Challenge](https://github.com/ThreadDesolated/Xiamen-University-Artificial-Intelligence-Challenge)
+克隆：`git clone https://github.com/ThreadDesolated/Xiamen-University-Artificial-Intelligence-Challenge.git`
+
 AutoLab 让 Agent 像研究生一样做实验：给它一句话目标（例如"把这个数据集验证准确率做到 0.85 以上，预算 2 分钟"），
 它会自主完成 **数据画像 → 实验方案规划 → 沙箱执行 → 指标评估 → 失败归因 → 重规划 → 配方沉淀与复现包交付**，
 全过程写入可回放的调用链 trace。
