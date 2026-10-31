@@ -14,7 +14,25 @@ from .. import config
 from ..store import db
 from ..tracing import read_trace
 
+try:  # Web 依赖可选：未安装时本模块仍可导入，只有 create_app 会给出明确提示
+    from pydantic import BaseModel
+except ImportError:  # pragma: no cover - 缺 Web 依赖时 create_app 会先报错
+    BaseModel = object  # type: ignore[assignment,misc]
+
 MAX_LIMIT = 200
+
+
+# 注意：请求模型必须定义在模块级。本模块启用了 from __future__ import annotations，
+# endpoint 注解是字符串，FastAPI 只在 endpoint 的 __globals__（即本模块命名空间）里
+# 解析它；定义在 create_app() 内部的局部类会解析失败，导致 /openapi.json 与 /docs
+# 返回 500（PydanticUserError: `RunRequest` is not fully defined）。
+class RunRequest(BaseModel):
+    """POST /api/runs 的请求体。"""
+
+    task_id: str
+    use_llm: bool = False
+    max_rounds: int | None = None
+    recipe_lookup: bool = True
 
 
 def list_tasks() -> list[dict]:
@@ -33,7 +51,6 @@ def create_app():
     try:
         from fastapi import FastAPI, HTTPException, Query
         from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
-        from pydantic import BaseModel
     except ImportError as exc:
         raise ImportError(
             "启动 trace 面板需要 Web 依赖：pip install -r requirements.txt（含 fastapi/uvicorn）"
@@ -45,12 +62,6 @@ def create_app():
     app = FastAPI(title="AutoLab", version="0.1.0")
     runs: dict[str, dict] = {}
     lock = threading.Lock()
-
-    class RunRequest(BaseModel):
-        task_id: str
-        use_llm: bool = False
-        max_rounds: int | None = None
-        recipe_lookup: bool = True
 
     def _run_async(run_id: str, task: TaskSpec, use_llm: bool, max_rounds, recipe_lookup: bool) -> None:
         summary = run_agent(

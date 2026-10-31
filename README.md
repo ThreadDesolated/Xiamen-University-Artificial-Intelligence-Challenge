@@ -43,7 +43,8 @@ report: reports/<run_id>.zip
 python -m autolab prepare --task t1_adult        # 下载并准备固定子集（UCI Adult 1k 行）
 python -m autolab run --task configs/tasks/t1_adult.json
 python -m autolab serve --port 8000              # FastAPI + SSE 调用链面板后端（W2 起接前端）
-python -m autolab replay traces/<run_id>.jsonl   # 回放一次运行（演示断网兜底用）
+ppython -m autolab replay --trace traces/<run_id>/trace.jsonl   # 回放一次运行（演示断网兜底用）
+# 或者用：python -m autolab replay --run-id <run_id>ython -m autolab replay traces/<run_id>.jsonl   # 回放一次运行（演示断网兜底用）
 python -m unittest discover -s tests -v          # 跑测试
 ```
 
