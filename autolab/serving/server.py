@@ -19,7 +19,52 @@ try:  # Web 依赖可选：未安装时本模块仍可导入，只有 create_app
 except ImportError:  # pragma: no cover - 缺 Web 依赖时 create_app 会先报错
     BaseModel = object  # type: ignore[assignment,misc]
 
+# 注意：`Request` 必须导入到**模块级**。本文件启用了 from __future__ import annotations，
+# endpoint 的注解是字符串，FastAPI 只在 endpoint.__globals__（即本模块命名空间）里解析它；
+# 写成 create_app() 内部的局部导入，`Request` 会被当成普通参数 → 422。
+try:
+    from starlette.requests import Request
+except ImportError:  # pragma: no cover
+    Request = object  # type: ignore[assignment,misc]
+
 MAX_LIMIT = 200
+
+#: SSE 参数：轮询间隔、心跳间隔、连接最长空闲时间（秒）
+SSE_POLL_SECONDS = 0.2
+SSE_HEARTBEAT_SECONDS = 15.0
+SSE_MAX_IDLE_SECONDS = 600.0
+
+
+def _tail_events(path, offset: int) -> tuple[list[dict], int]:
+    """从 offset 起读取 trace 新增的**完整行**，返回 (事件列表, 新 offset)。
+
+    - 增量读：不再每次把整个 trace 文件从头解析一遍，事件攒到几百条也不会变慢；
+    - 只消费到最后一个换行符，写端正在写半行时不会解析出坏 JSON；
+    - 坏行跳过，和 `read_trace` 的容错口径一致。
+    """
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(offset)
+            chunk = fh.read()
+    except OSError:
+        return [], offset
+    if not chunk:
+        return [], offset
+    cut = chunk.rfind(b"\n")
+    if cut < 0:
+        return [], offset  # 只有半行，等写端补齐
+    usable = chunk[: cut + 1]
+    new_offset = offset + len(usable)
+    events: list[dict] = []
+    for raw in usable.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            events.append(json.loads(raw.decode("utf-8", "replace")))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+    return events, new_offset
 
 
 # 注意：请求模型必须定义在模块级。本模块启用了 from __future__ import annotations，
@@ -128,29 +173,57 @@ def create_app():
         return PlainTextResponse(report.read_text(encoding="utf-8"), media_type="text/markdown")
 
     @app.get("/api/runs/{run_id}/stream")
-    def stream_trace(run_id: str):
-        """SSE：持续推送 trace 新事件，收到 done 事件后自动结束。"""
+    def stream_trace(run_id: str, request: Request, after: int = 0):
+        """SSE：持续推送 trace 新事件，收到 done 事件后自动结束。
+
+        稳定性约定（前端按这个接）：
+        - 每帧格式 `id: <seq>\\ndata: <json>\\n\\n`；断线重连时浏览器会自动带
+          `Last-Event-ID`，服务端据此续推，不会重复也不会漏；
+        - 空闲时每 15 秒发一个 `: ping` 注释帧，防止中间代理/网关掐断；
+        - 响应头带 no-cache / X-Accel-Buffering: no，避免被缓冲成"卡住不动"；
+        - trace 文件还没生成时返回 404，前端等 200ms 重试即可。
+        """
         path = config.TRACE_DIR / run_id / "trace.jsonl"
         if not path.exists():
             raise HTTPException(status_code=404, detail="trace 尚未生成")
 
-        def event_stream():
-            cursor = 0
-            idle = 0.0
-            while True:
-                events = read_trace(path)
-                while cursor < len(events):
-                    event = events[cursor]
-                    cursor += 1
-                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                    if event.get("node") == "done":
-                        return
-                    idle = 0.0
-                idle += 0.25
-                if idle > 600:
-                    return
-                time.sleep(0.25)
+        last_event_id = (request.headers.get("last-event-id") or "").strip()
+        try:
+            resume_from = max(int(after), int(last_event_id))
+        except ValueError:
+            resume_from = int(after)
 
-        return StreamingResponse(event_stream(), media_type="text/event-stream")
+        def event_stream():
+            offset = 0
+            idle_since = time.monotonic()
+            while True:
+                events, offset = _tail_events(path, offset)
+                fresh = 0
+                for event in events:
+                    seq = int(event.get("seq") or 0)
+                    if seq > resume_from:
+                        fresh += 1
+                        yield f"id: {seq}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    if event.get("node") == "done":
+                        return  # 跑完了（含"重连时 done 已 push 过"的情况）
+                now = time.monotonic()
+                if fresh:
+                    idle_since = now
+                elif now - idle_since >= SSE_HEARTBEAT_SECONDS:
+                    yield ": ping\n\n"  # 心跳注释帧：EventSource 会忽略，代理不会掐线
+                    idle_since = now
+                if now - idle_since > SSE_MAX_IDLE_SECONDS:
+                    return
+                time.sleep(SSE_POLL_SECONDS)
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     return app

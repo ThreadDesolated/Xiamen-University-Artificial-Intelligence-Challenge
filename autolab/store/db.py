@@ -10,6 +10,7 @@ import json
 import pathlib
 import sqlite3
 import time
+from contextlib import contextmanager
 
 from .. import config
 from ..schemas import ExperimentPlan, new_id
@@ -60,9 +61,25 @@ def connect(db_path=None) -> sqlite3.Connection:
     return conn
 
 
+@contextmanager
+def open_conn(db_path=None):
+    """用完必关的连接上下文。
+
+    ⚠️ 不能用 `with sqlite3.connect(...) as conn`：Connection 的上下文管理器**只管
+    事务提交/回滚，不会关闭连接**，脚本/服务反复调用会漏文件句柄，最后报
+    `ResourceWarning: unclosed database` 或 `database is locked`。
+    """
+    conn = connect(db_path)
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def init_db(db_path=None) -> pathlib.Path:
     path = pathlib.Path(db_path or config.DB_PATH)
-    with connect(path) as conn:
+    with open_conn(path) as conn:
         conn.executescript(_SCHEMA)
     return path
 
@@ -71,7 +88,7 @@ def save_run(run: dict, db_path=None) -> str:
     """保存一次运行记录。run 需含 run_id/task_id/task_type/status/rounds/best_metric 等。"""
     init_db(db_path)
     run_id = str(run.get("run_id") or new_id("run"))
-    with connect(db_path) as conn:
+    with open_conn(db_path) as conn:
         conn.execute(
             "INSERT OR REPLACE INTO runs"
             "(run_id, task_id, task_type, started_at, status, rounds, best_metric, plan_json, trace_path)"
@@ -104,7 +121,7 @@ def save_recipe(
     init_db(db_path)
     plan_dict = plan.to_dict() if isinstance(plan, ExperimentPlan) else dict(plan)
     recipe_id = new_id("recipe")
-    with connect(db_path) as conn:
+    with open_conn(db_path) as conn:
         old = conn.execute(
             "SELECT recipe_id, metric_value FROM recipes WHERE task_type=? AND profile_hash=?",
             (task_type, profile_hash),
@@ -136,7 +153,7 @@ def find_recipe(task_type: str, profile_hash: str, db_path=None) -> dict | None:
     path = pathlib.Path(db_path or config.DB_PATH)
     if not path.exists():
         return None
-    with connect(db_path) as conn:
+    with open_conn(db_path) as conn:
         row = conn.execute(
             "SELECT recipe_id, plan_json, metric_name, metric_value, created_at"
             " FROM recipes WHERE task_type=? AND profile_hash=? ORDER BY metric_value DESC LIMIT 1",
@@ -158,7 +175,7 @@ def save_attribution(run_id: str, round_idx: int, attribution, db_path=None) -> 
     init_db(db_path)
     data = attribution.to_dict() if hasattr(attribution, "to_dict") else dict(attribution)
     attribution_id = new_id("attr")
-    with connect(db_path) as conn:
+    with open_conn(db_path) as conn:
         conn.execute(
             "INSERT INTO attributions"
             "(attribution_id, run_id, round_idx, cause, confidence, evidence, fix_json, created_at)"
@@ -181,7 +198,7 @@ def list_runs(limit: int = 20, db_path=None) -> list[dict]:
     path = pathlib.Path(db_path or config.DB_PATH)
     if not path.exists():
         return []
-    with connect(db_path) as conn:
+    with open_conn(db_path) as conn:
         rows = conn.execute(
             "SELECT run_id, task_id, task_type, status, rounds, best_metric, started_at"
             " FROM runs ORDER BY started_at DESC LIMIT ?",
@@ -195,7 +212,7 @@ def stats(db_path=None) -> dict:
     path = pathlib.Path(db_path or config.DB_PATH)
     if not path.exists():
         return {"runs": 0, "recipes": 0, "attributions": 0}
-    with connect(db_path) as conn:
+    with open_conn(db_path) as conn:
         counts = {}
         for table in ("runs", "recipes", "attributions"):
             counts[table] = int(conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"])
