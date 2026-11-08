@@ -50,11 +50,25 @@ report: reports/<run_id>.zip
 ```bash
 python -m autolab prepare --task t1_adult        # 下载并准备固定子集（UCI Adult 1k 行）
 python -m autolab run --task configs/tasks/t1_adult.json
-python -m autolab serve --port 8000              # FastAPI + SSE 调用链面板后端（W2 起接前端）
-ppython -m autolab replay --trace traces/<run_id>/trace.jsonl   # 回放一次运行（演示断网兜底用）
-# 或者用：python -m autolab replay --run-id <run_id>ython -m autolab replay traces/<run_id>.jsonl   # 回放一次运行（演示断网兜底用）
+python -m autolab serve --port 8000              # 启动 Web 面板 + API（见下节）
+python -m autolab replay --run-id <run_id>       # 回放一次运行（演示断网兜底用）
 python -m unittest discover -s tests -v          # 跑测试
 ```
+
+## Web 面板（调用链可视化）
+
+```bash
+pip install -r requirements-panel.txt   # 首次需要：fastapi + uvicorn
+python -m autolab serve --port 8000
+```
+
+浏览器打开 http://127.0.0.1:8000/ ：
+
+- 左侧选择任务，勾选「复用成功配方」后点「开始实验」，右侧实时显示指标、轮次与调用链轨迹（前端 1 秒轮询；SSE 接口 `/api/runs/{run_id}/stream` 已就绪，可后续接入）；
+- 跑完出现报告 Markdown 链接；左侧「实验历史」可点开任意历史 run 回看完整 trace；
+- 接口文档在 `/docs`（Swagger），健康检查 `/api/health`。
+
+前端源码在 `autolab/serving/web/`（`index.html` / `app.js` / `style.css`），纯静态、无需 Node 构建；后端由 `autolab/serving/server.py` 挂载 `/panel` 静态目录并在 `/` 返回面板首页。
 
 ## 环境安装
 
@@ -93,7 +107,9 @@ python -m unittest discover -s tests -v          # 跑测试
 │   ├── store/db.py           # 配方库 + 归因知识库 + 运行记录（SQLite）
 │   ├── report.py             # 实验报告 + 复现包导出
 │   ├── datasets/             # 数据集准备与加载（合成/真实）
-│   └── serving/server.py     # FastAPI + SSE 服务
+│   └── serving/              # FastAPI + SSE 服务与 Web 面板
+│       ├── server.py         #   服务入口（含 /panel 静态挂载与 / 首页）
+│       └── web/              #   纯静态前端（index.html / app.js / style.css）
 ├── configs/
 │   ├── whitelist_ops.json    # 动作空间白名单（算子、模型、参数类型/范围）
 │   └── tasks/*.json          # 任务配置（数据路径、目标指标、预算、轮数）

@@ -60,6 +60,17 @@ def create_app():
     from ..schemas import TaskSpec
 
     app = FastAPI(title="AutoLab", version="0.1.0")
+    from pathlib import Path
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.responses import FileResponse
+
+    web_dir = Path(__file__).with_name("web")
+    app.mount("/panel", StaticFiles(directory=web_dir), name="panel")
+
+    @app.get("/", include_in_schema=False)
+    def dashboard():
+        return FileResponse(web_dir / "index.html")
+
     runs: dict[str, dict] = {}
     lock = threading.Lock()
 
