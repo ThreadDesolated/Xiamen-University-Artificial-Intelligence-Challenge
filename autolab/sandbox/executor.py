@@ -15,6 +15,21 @@ from .. import config
 from ..schemas import ExperimentPlan, TaskSpec
 
 
+def _timeout_seconds(task) -> int:
+    """子进程超时时间：默认 max(30, budget+20)，可用 AUTOLAB_SANDBOX_TIMEOUT 覆盖。
+
+    覆盖开关的用途：慢机器/断网彩排时临时放宽；测试里把它调小学生到秒级，
+    才能在 CI 里验证"超时必杀"这条兜底路径。
+    """
+    override = os.environ.get("AUTOLAB_SANDBOX_TIMEOUT", "").strip()
+    if override:
+        try:
+            return max(1, int(float(override)))
+        except ValueError:
+            pass
+    return max(30, int(task.budget_seconds) + 20)
+
+
 def execute_plan(
     plan: ExperimentPlan,
     task: TaskSpec,
@@ -49,7 +64,7 @@ def execute_plan(
         env.pop(key, None)
 
     cmd = [sys.executable, "-m", "autolab.sandbox.runner", "--spec", str(spec_path), "--out", str(out_path)]
-    timeout = max(30, int(task.budget_seconds) + 20)
+    timeout = _timeout_seconds(task)
     started = time.perf_counter()
     try:
         proc = subprocess.run(

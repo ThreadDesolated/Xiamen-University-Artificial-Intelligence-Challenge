@@ -7,7 +7,11 @@ from __future__ import annotations，endpoint 注解是字符串；FastAPI 只�
 """
 from __future__ import annotations
 
+import json
+import shutil
 import unittest
+
+from autolab import config
 
 #: docs/接口契约.md 约定的 HTTP 接口
 EXPECTED_PATHS = {
@@ -85,6 +89,58 @@ class RequestValidationTest(_ServingTestBase):
     def test_unknown_task_returns_404(self) -> None:
         resp = self.client.post("/api/runs", json={"task_id": "no_such_task"})
         self.assertEqual(resp.status_code, 404, resp.text[:500])
+
+
+class StreamEndpointTest(_ServingTestBase):
+    """SSE 回归：`request: Request` 若只写成 create_app() 里的局部导入，注解解析不到，
+    FastAPI 会把 request 当成必填查询参数，前端一连就是 422。
+    """
+
+    run_id = "serving_test_stream"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError as exc:  # 未安装 httpx：跳过请求级用例
+            raise unittest.SkipTest(str(exc))
+        cls.client = TestClient(cls.app)
+        cls.trace_dir = config.TRACE_DIR / cls.run_id
+        cls.trace_dir.mkdir(parents=True, exist_ok=True)
+        events = [
+            {"run_id": cls.run_id, "seq": 1, "ts": 0.0, "node": "load_data", "tool": "datasets.load_dataframe",
+             "input": None, "output": {}, "duration_ms": None},
+            {"run_id": cls.run_id, "seq": 2, "ts": 0.1, "node": "done", "tool": "",
+             "input": None, "output": {"status": "passed"}, "duration_ms": None},
+        ]
+        (cls.trace_dir / "trace.jsonl").write_text(
+            "\n".join(json.dumps(e, ensure_ascii=False) for e in events) + "\n", encoding="utf-8"
+        )
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        shutil.rmtree(cls.trace_dir, ignore_errors=True)
+
+    def test_headers_and_frames(self) -> None:
+        resp = self.client.get(f"/api/runs/{self.run_id}/stream")
+        self.assertEqual(resp.status_code, 200, resp.text[:300])
+        self.assertIn("text/event-stream", resp.headers["content-type"])
+        self.assertEqual(resp.headers["cache-control"], "no-cache, no-transform")
+        self.assertEqual(resp.headers["x-accel-buffering"], "no")
+        self.assertIn("id: 1", resp.text)
+        self.assertIn("data: ", resp.text)
+        self.assertIn('"node": "done"', resp.text)
+
+    def test_resume_skips_delivered_events(self) -> None:
+        resp = self.client.get(f"/api/runs/{self.run_id}/stream?after=1")
+        self.assertEqual(resp.status_code, 200, resp.text[:300])
+        self.assertNotIn("id: 1\n", resp.text)
+        self.assertIn("id: 2", resp.text)
+
+    def test_missing_trace_returns_404(self) -> None:
+        resp = self.client.get("/api/runs/__no_such_run__/stream")
+        self.assertEqual(resp.status_code, 404)
 
 
 if __name__ == "__main__":
