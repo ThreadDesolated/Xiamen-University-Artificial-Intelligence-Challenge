@@ -38,6 +38,7 @@ python -m autolab serve --port 8000
 | GET | `/api/runs?limit=20` | 历史运行（SQLite，重启不丢） |
 | POST | `/api/runs` | 发起一次运行（后台线程） |
 | GET | `/api/runs/{run_id}` | 本次运行的内存态摘要 |
+| DELETE | `/api/runs/{run_id}` | 删除历史记录（记录 + 归因 + 轨迹/报告/复现包） |
 | GET | `/api/runs/{run_id}/trace?after=0` | 拉取 trace 事件（一次性） |
 | GET | `/api/runs/{run_id}/report` | 取 `report.md` 原文 |
 | GET | `/api/runs/{run_id}/stream` | **SSE 实时推流** |
@@ -97,6 +98,26 @@ curl.exe -sS "http://127.0.0.1:8000/api/runs/run_20261106_205014_0a402b/report"
 ```
 
 返回 `text/markdown`；`404` 表示这一轮还没导出。
+
+### 3.5 删除历史记录
+
+```powershell
+curl.exe -sS -X DELETE "http://127.0.0.1:8000/api/runs/run_20261106_205014_0a402b"
+```
+
+```json
+{"ok": true, "run_id": "run_20261106_205014_0a402b", "deleted": {"db_runs": 1, "attributions": 4, "trace": true, "report": true, "bundle": true}}
+```
+
+删除范围：`runs` 行、该 run 的 `attributions` 行、`traces/<run_id>/`、`reports/<run_id>/` 与
+`reports/<run_id>.zip`；**配方库保留**（成功配方是跨任务经验，不随历史记录删除）。
+
+| 情况 | 状态码 |
+|---|---|
+| 正常删除 | `200`，`deleted` 里回报删掉的行数与文件是否存在 |
+| 实验仍在运行 | `409`（等结束后再删，避免 trace 写一半） |
+| 记录与文件都不存在 | `404` |
+| `run_id` 含非法字符（路径穿越防护） | `400` |
 
 ---
 

@@ -66,6 +66,8 @@ python -m autolab serve --port 8000
 
 - 左侧选择任务，勾选「复用成功配方」后点「开始实验」，右侧实时显示指标、轮次与调用链轨迹（前端 1 秒轮询；SSE 接口 `/api/runs/{run_id}/stream` 已就绪，可后续接入）；
 - 跑完出现报告 Markdown 链接；左侧「实验历史」可点开任意历史 run 回看完整 trace；
+- 每条历史记录右侧有「删除」按钮：确认后删除该次运行的记录、轨迹、报告与复现包
+  （配方库保留；运行中的实验需等结束后再删，避免 trace 写一半）；
 - 接口文档在 `/docs`（Swagger），健康检查 `/api/health`。
 
 前端源码在 `autolab/serving/web/`（`index.html` / `app.js` / `style.css`），纯静态、无需 Node 构建；后端由 `autolab/serving/server.py` 挂载 `/panel` 静态目录并在 `/` 返回面板首页。

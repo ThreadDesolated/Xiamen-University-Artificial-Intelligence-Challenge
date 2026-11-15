@@ -6,9 +6,12 @@
 from __future__ import annotations
 
 import json
+import re
+import shutil
 import threading
 import time
 import uuid
+from pathlib import Path
 
 from .. import config
 from ..store import db
@@ -28,6 +31,19 @@ except ImportError:  # pragma: no cover
     Request = object  # type: ignore[assignment,misc]
 
 MAX_LIMIT = 200
+
+#: run_id 只允许字母/数字/下划线/点/连字符（首字符必须为字母或数字），
+#: 用于 DELETE 时拼路径，防止 ../ 之类的路径穿越。
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _run_artifacts(run_id: str) -> tuple[Path, Path, Path]:
+    """返回一次运行对应的（轨迹目录, 报告目录, 复现包 zip）路径。"""
+    return (
+        config.TRACE_DIR / run_id,
+        config.REPORT_DIR / run_id,
+        config.REPORT_DIR / f"{run_id}.zip",
+    )
 
 #: SSE 参数：轮询间隔、心跳间隔、连接最长空闲时间（秒）
 SSE_POLL_SECONDS = 0.2
@@ -105,7 +121,6 @@ def create_app():
     from ..schemas import TaskSpec
 
     app = FastAPI(title="AutoLab", version="0.1.0")
-    from pathlib import Path
     from fastapi.staticfiles import StaticFiles
     from fastapi.responses import FileResponse
 
@@ -170,6 +185,47 @@ def create_app():
         if summary is not None:
             return summary
         raise HTTPException(status_code=404, detail="运行不存在或已过期（内存态）")
+
+    @app.delete("/api/runs/{run_id}")
+    def delete_run(run_id: str) -> dict:
+        """删除一条历史记录：runs 行 + 该次运行的全部归因 + 轨迹/报告/复现包文件。
+
+        - 运行中的实验返回 409（等它结束后再删，避免把 trace 删到一半）；
+        - 记录与文件都不存在时返回 404；
+        - 配方库不动：已沉淀的成功配方属于跨任务经验，不随历史记录一起删除。
+        """
+        if not _RUN_ID_RE.match(run_id):
+            raise HTTPException(status_code=400, detail="非法的 run_id")
+        with lock:
+            summary = runs.get(run_id)
+            if summary is not None and summary.get("status") == "running":
+                raise HTTPException(status_code=409, detail="实验正在运行，结束后才能删除")
+        trace_dir, report_dir, bundle_zip = _run_artifacts(run_id)
+        had_trace = trace_dir.is_dir()
+        had_report = report_dir.is_dir()
+        had_bundle = bundle_zip.is_file()
+        counts = db.delete_run(run_id)
+        if had_trace:
+            shutil.rmtree(trace_dir, ignore_errors=True)
+        if had_report:
+            shutil.rmtree(report_dir, ignore_errors=True)
+        if had_bundle:
+            bundle_zip.unlink(missing_ok=True)
+        with lock:
+            runs.pop(run_id, None)
+        if not counts["runs"] and not (had_trace or had_report or had_bundle):
+            raise HTTPException(status_code=404, detail="运行不存在")
+        return {
+            "ok": True,
+            "run_id": run_id,
+            "deleted": {
+                "db_runs": counts["runs"],
+                "attributions": counts["attributions"],
+                "trace": had_trace,
+                "report": had_report,
+                "bundle": had_bundle,
+            },
+        }
 
     @app.get("/api/runs/{run_id}/trace")
     def get_trace(run_id: str, after: int = 0) -> list[dict]:

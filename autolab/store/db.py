@@ -108,6 +108,22 @@ def save_run(run: dict, db_path=None) -> str:
     return run_id
 
 
+def delete_run(run_id: str, db_path=None) -> dict:
+    """删除一次运行记录及其失败归因（历史记录里的"删除"）。
+
+    只删"记录"本身：runs 行 + 该次运行的 attributions 行；**配方库保留**——
+    已经沉淀的成功方案属于跨任务经验，不应因为删除一条历史记录而悄悄消失。
+    返回 {"runs": 删除的运行行数, "attributions": 删除的归因行数}。
+    """
+    init_db(db_path)
+    with open_conn(db_path) as conn:
+        attributions = conn.execute(
+            "DELETE FROM attributions WHERE run_id=?", (str(run_id),)
+        ).rowcount
+        runs = conn.execute("DELETE FROM runs WHERE run_id=?", (str(run_id),)).rowcount
+    return {"runs": int(runs), "attributions": int(attributions)}
+
+
 def save_recipe(
     task_type: str,
     profile_hash: str,

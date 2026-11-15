@@ -8,10 +8,14 @@ from __future__ import annotations，endpoint 注解是字符串；FastAPI 只�
 from __future__ import annotations
 
 import json
+import pathlib
 import shutil
+import tempfile
 import unittest
+from unittest import mock
 
 from autolab import config
+from autolab.store import db
 
 #: docs/接口契约.md 约定的 HTTP 接口
 EXPECTED_PATHS = {
@@ -141,6 +145,103 @@ class StreamEndpointTest(_ServingTestBase):
     def test_missing_trace_returns_404(self) -> None:
         resp = self.client.get("/api/runs/__no_such_run__/stream")
         self.assertEqual(resp.status_code, 404)
+
+
+class DeleteRunTest(unittest.TestCase):
+    """DELETE /api/runs/{run_id}：记录、归因、轨迹/报告/复现包一并删除，配方保留。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        try:
+            from autolab.serving.server import create_app
+        except ImportError as exc:
+            raise unittest.SkipTest(str(exc))
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError as exc:
+            raise unittest.SkipTest(str(exc))
+        cls.client = TestClient(create_app())
+
+    def setUp(self) -> None:
+        self.run_id = "run_delete_unit"
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="autolab_del_"))
+        self.trace_root = self.tmp / "traces"
+        self.report_root = self.tmp / "reports"
+        self.db_path = self.tmp / "autolab.sqlite3"
+        self._patches = [
+            mock.patch.object(config, "TRACE_DIR", self.trace_root),
+            mock.patch.object(config, "REPORT_DIR", self.report_root),
+            mock.patch.object(config, "DB_PATH", self.db_path),
+        ]
+        for patch in self._patches:
+            patch.start()
+        trace_dir = self.trace_root / self.run_id
+        trace_dir.mkdir(parents=True)
+        (trace_dir / "trace.jsonl").write_text(
+            json.dumps({"run_id": self.run_id, "seq": 1, "node": "done", "output": {}}, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        report_dir = self.report_root / self.run_id
+        report_dir.mkdir(parents=True)
+        (report_dir / "report.md").write_text("# 报告\n", encoding="utf-8")
+        (self.report_root / f"{self.run_id}.zip").write_bytes(b"PK\x05\x06" + b"\x00" * 18)
+        db.save_run(
+            {
+                "run_id": self.run_id,
+                "task_id": "t1_demo",
+                "task_type": "binary_classification",
+                "status": "passed",
+                "rounds": 2,
+                "best_metric": 0.873,
+            }
+        )
+        db.save_attribution(
+            self.run_id,
+            1,
+            {"cause": "class_imbalance", "confidence": 0.8, "evidence": "test", "fix": {}},
+        )
+
+    def tearDown(self) -> None:
+        for patch in self._patches:
+            patch.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_delete_removes_record_attributions_and_artifacts(self) -> None:
+        resp = self.client.delete(f"/api/runs/{self.run_id}")
+        self.assertEqual(resp.status_code, 200, resp.text[:300])
+        body = resp.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(
+            body["deleted"],
+            {"db_runs": 1, "attributions": 1, "trace": True, "report": True, "bundle": True},
+        )
+        self.assertFalse((self.trace_root / self.run_id).exists())
+        self.assertFalse((self.report_root / self.run_id).exists())
+        self.assertFalse((self.report_root / f"{self.run_id}.zip").exists())
+        self.assertEqual(db.stats()["runs"], 0)
+        self.assertEqual(db.stats()["attributions"], 0)
+        self.assertEqual(self.client.get("/api/runs").json(), [])
+
+    def test_delete_unknown_returns_404(self) -> None:
+        resp = self.client.delete("/api/runs/run_not_exists")
+        self.assertEqual(resp.status_code, 404, resp.text[:300])
+
+    def test_delete_illegal_id_returns_400(self) -> None:
+        resp = self.client.delete("/api/runs/bad%20id")
+        self.assertEqual(resp.status_code, 400, resp.text[:300])
+
+    def test_recipe_survives_delete(self) -> None:
+        db.save_recipe(
+            "binary_classification",
+            "hash123",
+            {"ops": [], "model": {"kind": "logistic_gd", "params": {}}, "eval": {"n_splits": 5, "seed": 42}},
+            "accuracy",
+            0.9,
+        )
+        resp = self.client.delete(f"/api/runs/{self.run_id}")
+        self.assertEqual(resp.status_code, 200, resp.text[:300])
+        self.assertEqual(db.stats()["recipes"], 1)
+        self.assertIsNotNone(db.find_recipe("binary_classification", "hash123"))
 
 
 if __name__ == "__main__":
