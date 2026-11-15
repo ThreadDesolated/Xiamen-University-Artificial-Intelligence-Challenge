@@ -68,6 +68,9 @@ python -m autolab serve --port 8000
 - 跑完出现报告 Markdown 链接；左侧「实验历史」可点开任意历史 run 回看完整 trace；
 - 每条历史记录右侧有「删除」按钮：确认后删除该次运行的记录、轨迹、报告与复现包
   （配方库保留；运行中的实验需等结束后再删，避免 trace 写一半）；
+- 支持批量删除：勾选多条（或点「全选」）后点「删除所选（N）」，逐条尽量删，
+  运行中/不存在的记录会在提示里列出；批量接口 `DELETE /api/runs`（body `{"run_ids": [...]}`，
+  一次最多 100 条）；
 - 接口文档在 `/docs`（Swagger），健康检查 `/api/health`。
 
 前端源码在 `autolab/serving/web/`（`index.html` / `app.js` / `style.css`），纯静态、无需 Node 构建；后端由 `autolab/serving/server.py` 挂载 `/panel` 静态目录并在 `/` 返回面板首页。

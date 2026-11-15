@@ -31,6 +31,8 @@ except ImportError:  # pragma: no cover
     Request = object  # type: ignore[assignment,misc]
 
 MAX_LIMIT = 200
+#: 批量删除一次最多接受的 run 数量（防止一个请求误删整个历史库）。
+MAX_BATCH = 100
 
 #: run_id 只允许字母/数字/下划线/点/连字符（首字符必须为字母或数字），
 #: 用于 DELETE 时拼路径，防止 ../ 之类的路径穿越。
@@ -44,6 +46,32 @@ def _run_artifacts(run_id: str) -> tuple[Path, Path, Path]:
         config.REPORT_DIR / run_id,
         config.REPORT_DIR / f"{run_id}.zip",
     )
+
+
+def _remove_run_data(run_id: str) -> dict:
+    """删除一次运行的 DB 记录与轨迹/报告/复现包文件，返回删除明细。
+
+    调用方负责校验 run_id 格式与运行状态（运行中不允许删）；配方库不动，
+    原因见 `db.delete_run` 的注释。
+    """
+    trace_dir, report_dir, bundle_zip = _run_artifacts(run_id)
+    had_trace = trace_dir.is_dir()
+    had_report = report_dir.is_dir()
+    had_bundle = bundle_zip.is_file()
+    counts = db.delete_run(run_id)
+    if had_trace:
+        shutil.rmtree(trace_dir, ignore_errors=True)
+    if had_report:
+        shutil.rmtree(report_dir, ignore_errors=True)
+    if had_bundle:
+        bundle_zip.unlink(missing_ok=True)
+    return {
+        "db_runs": counts["runs"],
+        "attributions": counts["attributions"],
+        "trace": had_trace,
+        "report": had_report,
+        "bundle": had_bundle,
+    }
 
 #: SSE 参数：轮询间隔、心跳间隔、连接最长空闲时间（秒）
 SSE_POLL_SECONDS = 0.2
@@ -94,6 +122,16 @@ class RunRequest(BaseModel):
     use_llm: bool = False
     max_rounds: int | None = None
     recipe_lookup: bool = True
+
+
+class BatchDeleteRequest(BaseModel):
+    """DELETE /api/runs 的请求体（面板「批量删除」用）。
+
+    同样必须定义在模块级：本模块启用了 postponed annotations，FastAPI 只在
+    模块命名空间里解析请求模型的注解，局部类会让 /openapi.json 构建失败。
+    """
+
+    run_ids: list[str]
 
 
 def list_tasks() -> list[dict]:
@@ -200,30 +238,60 @@ def create_app():
             summary = runs.get(run_id)
             if summary is not None and summary.get("status") == "running":
                 raise HTTPException(status_code=409, detail="实验正在运行，结束后才能删除")
-        trace_dir, report_dir, bundle_zip = _run_artifacts(run_id)
-        had_trace = trace_dir.is_dir()
-        had_report = report_dir.is_dir()
-        had_bundle = bundle_zip.is_file()
-        counts = db.delete_run(run_id)
-        if had_trace:
-            shutil.rmtree(trace_dir, ignore_errors=True)
-        if had_report:
-            shutil.rmtree(report_dir, ignore_errors=True)
-        if had_bundle:
-            bundle_zip.unlink(missing_ok=True)
-        with lock:
+            deleted = _remove_run_data(run_id)
             runs.pop(run_id, None)
-        if not counts["runs"] and not (had_trace or had_report or had_bundle):
+        if not deleted["db_runs"] and not (
+            deleted["trace"] or deleted["report"] or deleted["bundle"]
+        ):
             raise HTTPException(status_code=404, detail="运行不存在")
+        return {"ok": True, "run_id": run_id, "deleted": deleted}
+
+    @app.delete("/api/runs")
+    def delete_runs(req: BatchDeleteRequest) -> dict:
+        """批量删除历史记录（面板「全选 / 批量删除」）。
+
+        语义（前端按这个接）：
+        - 请求体 `{"run_ids": ["...", ...]}`，自动去重，最多 `MAX_BATCH` 条，空列表 400；
+        - 逐条尽量删：非法的 id、运行中的、不存在的记入 `failed`，其余照常删除，
+          整体仍返回 200（部分成功），前端据此展示"删了几条、哪几条没删"；
+        - 删除内容与单条删除一致：runs 行 + 归因 + 轨迹/报告/复现包，配方库保留；
+        - 响应 `deleted` 是明细数组，`counts` 汇总 requested/deleted/failed。
+        """
+        if not req.run_ids:
+            raise HTTPException(status_code=400, detail="run_ids 不能为空")
+        unique: list[str] = []
+        for run_id in req.run_ids:
+            if run_id not in unique:
+                unique.append(run_id)
+        if len(unique) > MAX_BATCH:
+            raise HTTPException(status_code=400, detail=f"一次最多删除 {MAX_BATCH} 条记录")
+        deleted: list[dict] = []
+        failed: list[dict] = []
+        for run_id in unique:
+            if not _RUN_ID_RE.match(run_id):
+                failed.append({"run_id": run_id, "reason": "非法的 run_id"})
+                continue
+            with lock:
+                summary = runs.get(run_id)
+                running = summary is not None and summary.get("status") == "running"
+            if running:
+                failed.append({"run_id": run_id, "reason": "实验正在运行，结束后才能删除"})
+                continue
+            info = _remove_run_data(run_id)
+            with lock:
+                runs.pop(run_id, None)
+            if not info["db_runs"] and not (info["trace"] or info["report"] or info["bundle"]):
+                failed.append({"run_id": run_id, "reason": "运行不存在"})
+                continue
+            deleted.append({"run_id": run_id, **info})
         return {
             "ok": True,
-            "run_id": run_id,
-            "deleted": {
-                "db_runs": counts["runs"],
-                "attributions": counts["attributions"],
-                "trace": had_trace,
-                "report": had_report,
-                "bundle": had_bundle,
+            "deleted": deleted,
+            "failed": failed,
+            "counts": {
+                "requested": len(unique),
+                "deleted": len(deleted),
+                "failed": len(failed),
             },
         }
 

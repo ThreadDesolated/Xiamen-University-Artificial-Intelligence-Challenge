@@ -124,6 +124,28 @@ def delete_run(run_id: str, db_path=None) -> dict:
     return {"runs": int(runs), "attributions": int(attributions)}
 
 
+def delete_runs(run_ids: list[str], db_path=None) -> dict:
+    """批量删除运行记录及其失败归因（面板「批量删除」）。
+
+    与 `delete_run` 语义一致：只删"记录"（runs 行 + 对应 attributions 行），
+    配方库保留；用一条 SQL 的 `IN (...)` 处理，避免逐条开关连接。
+    返回 {"runs": 删除的运行行数, "attributions": 删除的归因行数}。
+    """
+    ids = [str(run_id) for run_id in run_ids]
+    if not ids:
+        return {"runs": 0, "attributions": 0}
+    init_db(db_path)
+    placeholders = ",".join("?" * len(ids))
+    with open_conn(db_path) as conn:
+        attributions = conn.execute(
+            f"DELETE FROM attributions WHERE run_id IN ({placeholders})", ids
+        ).rowcount
+        runs = conn.execute(
+            f"DELETE FROM runs WHERE run_id IN ({placeholders})", ids
+        ).rowcount
+    return {"runs": int(runs), "attributions": int(attributions)}
+
+
 def save_recipe(
     task_type: str,
     profile_hash: str,

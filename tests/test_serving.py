@@ -244,5 +244,137 @@ class DeleteRunTest(unittest.TestCase):
         self.assertIsNotNone(db.find_recipe("binary_classification", "hash123"))
 
 
+class BatchDeleteRunTest(unittest.TestCase):
+    """DELETE /api/runs：批量删除历史记录，逐条尽量删，部分失败返回 200 + failed 明细。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        try:
+            from autolab.serving.server import create_app
+        except ImportError as exc:
+            raise unittest.SkipTest(str(exc))
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError as exc:
+            raise unittest.SkipTest(str(exc))
+        cls.client = TestClient(create_app())
+
+    def setUp(self) -> None:
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="autolab_batchdel_"))
+        self.trace_root = self.tmp / "traces"
+        self.report_root = self.tmp / "reports"
+        self.db_path = self.tmp / "autolab.sqlite3"
+        self._patches = [
+            mock.patch.object(config, "TRACE_DIR", self.trace_root),
+            mock.patch.object(config, "REPORT_DIR", self.report_root),
+            mock.patch.object(config, "DB_PATH", self.db_path),
+        ]
+        for patch in self._patches:
+            patch.start()
+
+    def tearDown(self) -> None:
+        for patch in self._patches:
+            patch.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _seed(self, run_id: str) -> None:
+        """造一条带轨迹/报告/复现包/归因的历史记录。"""
+        trace_dir = self.trace_root / run_id
+        trace_dir.mkdir(parents=True)
+        (trace_dir / "trace.jsonl").write_text(
+            json.dumps({"run_id": run_id, "seq": 1, "node": "done", "output": {}}, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        report_dir = self.report_root / run_id
+        report_dir.mkdir(parents=True)
+        (report_dir / "report.md").write_text("# 报告\n", encoding="utf-8")
+        (self.report_root / f"{run_id}.zip").write_bytes(b"PK\x05\x06" + b"\x00" * 18)
+        db.save_run(
+            {
+                "run_id": run_id,
+                "task_id": "t1_demo",
+                "task_type": "binary_classification",
+                "status": "passed",
+                "rounds": 2,
+                "best_metric": 0.873,
+            }
+        )
+        db.save_attribution(
+            run_id, 1, {"cause": "class_imbalance", "confidence": 0.8, "evidence": "test", "fix": {}}
+        )
+
+    def _delete(self, run_ids):
+        return self.client.request("DELETE", "/api/runs", json={"run_ids": run_ids})
+
+    def test_batch_delete_multiple(self) -> None:
+        self._seed("run_batch_a")
+        self._seed("run_batch_b")
+        resp = self._delete(["run_batch_a", "run_batch_b"])
+        self.assertEqual(resp.status_code, 200, resp.text[:300])
+        body = resp.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual([d["run_id"] for d in body["deleted"]], ["run_batch_a", "run_batch_b"])
+        self.assertEqual(body["failed"], [])
+        self.assertEqual(body["counts"], {"requested": 2, "deleted": 2, "failed": 0})
+        self.assertTrue(all(d["trace"] and d["report"] and d["bundle"] for d in body["deleted"]))
+        for run_id in ("run_batch_a", "run_batch_b"):
+            self.assertFalse((self.trace_root / run_id).exists())
+            self.assertFalse((self.report_root / run_id).exists())
+            self.assertFalse((self.report_root / f"{run_id}.zip").exists())
+        stats = db.stats()
+        self.assertEqual((stats["runs"], stats["attributions"]), (0, 0))
+        self.assertEqual(self.client.get("/api/runs").json(), [])
+
+    def test_batch_delete_partial_success(self) -> None:
+        self._seed("run_batch_exist")
+        resp = self._delete(["run_batch_exist", "run_batch_missing"])
+        self.assertEqual(resp.status_code, 200, resp.text[:300])
+        body = resp.json()
+        self.assertEqual([d["run_id"] for d in body["deleted"]], ["run_batch_exist"])
+        self.assertEqual(
+            body["failed"], [{"run_id": "run_batch_missing", "reason": "运行不存在"}]
+        )
+        self.assertEqual(body["counts"], {"requested": 2, "deleted": 1, "failed": 1})
+        self.assertFalse((self.trace_root / "run_batch_exist").exists())
+
+    def test_batch_delete_illegal_id_marked_failed(self) -> None:
+        self._seed("run_batch_ok")
+        resp = self._delete(["bad id", "run_batch_ok"])
+        self.assertEqual(resp.status_code, 200, resp.text[:300])
+        body = resp.json()
+        self.assertEqual(body["failed"], [{"run_id": "bad id", "reason": "非法的 run_id"}])
+        self.assertEqual([d["run_id"] for d in body["deleted"]], ["run_batch_ok"])
+
+    def test_batch_delete_dedupes_ids(self) -> None:
+        self._seed("run_batch_dup")
+        resp = self._delete(["run_batch_dup", "run_batch_dup"])
+        self.assertEqual(resp.status_code, 200, resp.text[:300])
+        body = resp.json()
+        self.assertEqual(body["counts"], {"requested": 1, "deleted": 1, "failed": 0})
+        self.assertEqual(len(body["deleted"]), 1)
+
+    def test_batch_delete_empty_returns_400(self) -> None:
+        resp = self._delete([])
+        self.assertEqual(resp.status_code, 400, resp.text[:300])
+
+    def test_batch_delete_too_many_returns_400(self) -> None:
+        resp = self._delete([f"run_batch_{i}" for i in range(101)])
+        self.assertEqual(resp.status_code, 400, resp.text[:300])
+
+    def test_batch_recipe_survives_delete(self) -> None:
+        self._seed("run_batch_recipe")
+        db.save_recipe(
+            "binary_classification",
+            "hash123",
+            {"ops": [], "model": {"kind": "logistic_gd", "params": {}}, "eval": {"n_splits": 5, "seed": 42}},
+            "accuracy",
+            0.9,
+        )
+        resp = self._delete(["run_batch_recipe"])
+        self.assertEqual(resp.status_code, 200, resp.text[:300])
+        self.assertEqual(db.stats()["recipes"], 1)
+        self.assertIsNotNone(db.find_recipe("binary_classification", "hash123"))
+
+
 if __name__ == "__main__":
     unittest.main()

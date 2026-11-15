@@ -39,6 +39,7 @@ python -m autolab serve --port 8000
 | POST | `/api/runs` | 发起一次运行（后台线程） |
 | GET | `/api/runs/{run_id}` | 本次运行的内存态摘要 |
 | DELETE | `/api/runs/{run_id}` | 删除历史记录（记录 + 归因 + 轨迹/报告/复现包） |
+| DELETE | `/api/runs` | 批量删除历史记录（body: `run_ids`，逐条尽量删） |
 | GET | `/api/runs/{run_id}/trace?after=0` | 拉取 trace 事件（一次性） |
 | GET | `/api/runs/{run_id}/report` | 取 `report.md` 原文 |
 | GET | `/api/runs/{run_id}/stream` | **SSE 实时推流** |
@@ -118,6 +119,26 @@ curl.exe -sS -X DELETE "http://127.0.0.1:8000/api/runs/run_20261106_205014_0a402
 | 实验仍在运行 | `409`（等结束后再删，避免 trace 写一半） |
 | 记录与文件都不存在 | `404` |
 | `run_id` 含非法字符（路径穿越防护） | `400` |
+
+### 3.6 批量删除历史记录
+
+```powershell
+curl.exe -sS -X DELETE "http://127.0.0.1:8000/api/runs" `
+  -H "Content-Type: application/json" `
+  -d "{\"run_ids\":[\"run_20261106_205014_0a402b\",\"run_20261106_205025_1b2c3d\"]}"
+```
+
+```json
+{"ok": true,
+ "deleted": [{"run_id": "run_20261106_205014_0a402b", "db_runs": 1, "attributions": 4, "trace": true, "report": true, "bundle": true}],
+ "failed": [{"run_id": "run_20261106_205025_1b2c3d", "reason": "实验正在运行，结束后才能删除"}],
+ "counts": {"requested": 2, "deleted": 1, "failed": 1}}
+```
+
+- `run_ids` 自动去重，一次最多 100 条，空列表返回 `400`；
+- 逐条尽量删：运行中的 / 不存在的 / 非法 id 记入 `failed`，其余照常删除，整体返回 `200`（部分成功）；
+- 删除范围与单条删除一致（记录 + 归因 + 轨迹/报告/复现包），**配方库保留**；
+- 面板上的用法：每条历史前的勾选框逐个选择、点「全选」全选，再点「删除所选（N）」。
 
 ---
 
