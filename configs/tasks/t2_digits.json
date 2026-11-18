@@ -11,5 +11,5 @@
   "seed": 42,
   "budget_seconds": 120,
   "max_rounds": 3,
-  "notes": "预置失败点：学习率过大 + 未标准化；先运行 python -m autolab prepare --task t2_digits"
+  "notes": "先运行 python -m autolab prepare --task t2_digits"
 }
