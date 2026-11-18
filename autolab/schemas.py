@@ -56,6 +56,7 @@ class TaskSpec(_JsonMixin):
     seed: int = 42
     budget_seconds: int = 120
     max_rounds: int = 3
+    holdout_ratio: float = 0.0  # >0 时先按比例切出留出集，只用于最终复验（不参与选模/调参）
     features: Optional[list[str]] = None
     notes: str = ""
 
@@ -71,6 +72,8 @@ class TaskSpec(_JsonMixin):
             raise ValidationError("n_splits 至少为 2")
         if self.budget_seconds <= 0 or self.max_rounds <= 0:
             raise ValidationError("budget_seconds / max_rounds 必须为正数")
+        if not (0.0 <= float(self.holdout_ratio) < 0.5):
+            raise ValidationError("holdout_ratio 需在 [0, 0.5) 之间（0 表示不启用留出集）")
         return self
 
     @classmethod
@@ -139,6 +142,7 @@ class ExperimentResult(_JsonMixin):
     status: str = "ok"  # ok | error | timeout | invalid
     metrics: dict = field(default_factory=dict)  # {metric_name: Metrics.to_dict()}
     train_metric: Optional[float] = None
+    holdout: Optional[dict] = None  # 留出集复验：{metric, value, n_samples, n_train_samples, ratio, split_seed}
     seconds: float = 0.0
     error: str = ""
     stdout_tail: str = ""
@@ -150,6 +154,12 @@ class ExperimentResult(_JsonMixin):
         if not item:
             return None
         return float(item.get("mean"))  # type: ignore[union-attr]
+
+    def holdout_value(self) -> Optional[float]:
+        if not self.holdout:
+            return None
+        value = self.holdout.get("value")
+        return None if value is None else float(value)
 
     @property
     def ok(self) -> bool:

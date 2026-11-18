@@ -43,6 +43,7 @@ def main() -> int:
             n_splits=task.n_splits,
             seed=task.seed,
             features=task.features,
+            holdout_ratio=task.holdout_ratio,
         )
         result.update(payload)
         result["status"] = "ok"

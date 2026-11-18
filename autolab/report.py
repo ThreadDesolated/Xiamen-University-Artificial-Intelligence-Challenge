@@ -82,27 +82,38 @@ def markdown_report(summary: dict) -> str:
         f"- 轮次：{summary.get('rounds_used')} / {summary.get('max_rounds')}，"
         f"规划来源：{summary.get('planner_source')}，配方命中：{summary.get('recipe_hit')}"
     )
+    holdout = summary.get("holdout") or {}
+    if holdout.get("value") is not None:
+        lines.append(
+            f"- 留出集复验：{holdout.get('metric', metric)} = {_fmt(holdout.get('value'))}"
+            f"（{holdout.get('n_samples')} 行，仅用于最终复验，不参与达标判定/选模）"
+        )
     lines.append(f"- 生成时间：{time.strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append("")
 
+    has_holdout = any((item.get("holdout") or {}).get("value") is not None for item in summary.get("rounds") or [])
     lines.append("## 一、迭代过程")
     lines.append("")
-    lines.append("| 轮次 | 方案来源 | 指标（均值±标准差） | 是否达标 | 耗时 |")
-    lines.append("| --- | --- | --- | --- | --- |")
+    if has_holdout:
+        lines.append("| 轮次 | 方案来源 | 指标（均值±标准差） | 留出集 | 是否达标 | 耗时 |")
+        lines.append("| --- | --- | --- | --- | --- | --- |")
+    else:
+        lines.append("| 轮次 | 方案来源 | 指标（均值±标准差） | 是否达标 | 耗时 |")
+        lines.append("| --- | --- | --- | --- | --- |")
     for item in summary.get("rounds") or []:
         result = item.get("result") or {}
         metrics = result.get("metrics") or {}
         detail = metrics.get(metric) or {}
         mean, std = detail.get("mean"), detail.get("std")
-        lines.append(
-            "| {round} | {source} | {value} | {passed} | {seconds}s |".format(
-                round=item.get("round"),
-                source=(item.get("plan") or {}).get("source", "-"),
-                value=f"{_fmt(mean)} ± {_fmt(std)}",
-                passed="是" if item.get("passed") else "否",
-                seconds=_fmt(result.get("seconds"), 2),
-            )
-        )
+        cells = [
+            str(item.get("round")),
+            str((item.get("plan") or {}).get("source", "-")),
+            f"{_fmt(mean)} ± {_fmt(std)}",
+        ]
+        if has_holdout:
+            cells.append(_fmt((item.get("holdout") or {}).get("value")))
+        cells.extend(["是" if item.get("passed") else "否", f"{_fmt(result.get('seconds'), 2)}s"])
+        lines.append("| " + " | ".join(cells) + " |")
     lines.append("")
 
     lines.append("## 二、失败归因（如有）")
@@ -154,7 +165,23 @@ def markdown_report(summary: dict) -> str:
     lines.append(f"- 画像指纹：{summary.get('profile_hash')}")
     lines.append("")
 
-    lines.append("## 五、复现方式")
+    lines.append("## 五、留出集复验（防验证集过拟合）")
+    lines.append("")
+    holdout = summary.get("holdout") or {}
+    if holdout.get("value") is not None:
+        lines.append(
+            f"- 留出集（{holdout.get('n_samples')} 行，占 {holdout.get('ratio', '-')}）："
+            f"{holdout.get('metric', metric)} = **{_fmt(holdout.get('value'))}**"
+        )
+        lines.append(
+            f"- 说明：留出集在交叉验证开始前切出，未参与 K 折划分、未参与方案选择与调参；"
+            f"CV 分数用于 Agent 决策，留出集分数用于估计对外泛化能力。split_seed={holdout.get('split_seed')}"
+        )
+    else:
+        lines.append("（本任务未启用留出集，holdout_ratio=0）")
+    lines.append("")
+
+    lines.append("## 六、复现方式")
     lines.append("")
     lines.append("```bash")
     lines.append("# 方式一：按保存的方案原样复跑（推荐）")
@@ -163,7 +190,7 @@ def markdown_report(summary: dict) -> str:
     lines.append(f"python -m autolab replay --run-id {summary.get('run_id')}")
     lines.append("```")
     lines.append("")
-    lines.append("## 六、环境信息")
+    lines.append("## 七、环境信息")
     lines.append("")
     lines.append("```json")
     lines.append(json.dumps(summary.get("env") or {}, ensure_ascii=False, indent=2))
@@ -196,6 +223,7 @@ def export_bundle(summary: dict) -> dict:
             "final_metric": summary.get("final_metric"),
             "rounds_used": summary.get("rounds_used"),
             "profile_hash": summary.get("profile_hash"),
+            "holdout": summary.get("holdout"),
             "created_at": time.time(),
         },
     )

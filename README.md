@@ -28,6 +28,7 @@ AutoLab 让 Agent 像研究生一样做实验：给它一句话目标（例如"�
 | 受限动作空间 | 方案是一份 JSON，只允许白名单算子/模型；做 Schema 与白名单双重校验，非法方案回退模板方案 |
 | 安全沙箱 | 子进程隔离、超时即杀、socket 级禁网、不依赖 Docker |
 | 可复现交付 | 每次运行自动导出 trace、报告、配置、环境信息与一键复现脚本 zip |
+| 留出集复验 | 评测时可选先切出独立留出集（`holdout_ratio`，默认 0 不启用；真实任务 t1_adult 用 20%）：K 折划分与选模都不碰它，跑完最后复验一次并写进报告，抑制多轮重规划导致的验证集过拟合 |
 
 ## 快速开始（零额外依赖：只用 numpy + pandas）
 
@@ -61,6 +62,10 @@ python -m unittest discover -s tests -v          # 跑测试
 `t1_adult` 是真实数据任务（1000 行 Adult 子集，正负比 750/250）：线性模型上限约 0.845，达不到 0.85 阈值，
 归因会在第 2 轮把模型升级为随机森林，实测 0.5230 → 0.8560，两轮达标（需 `pip install -r requirements.txt`，
 其中包含 scikit-learn；跳过的旧报告 `reports/run_20261118_204250_82d7aa` 可作修复前对比）。
+
+该任务的配置启用了留出集复验（`holdout_ratio: 0.2`）：1000 行中先切 200 行留出集，K 折只在其余 800 行上做，
+达标判定仍看 CV 均值；跑完再在留出集上评估一次（实测 CV 0.8538、留出集 0.8350），
+报告与 CLI 都会打印这个"对外泛化"成绩，避免多轮重规划把验证集调过头。`t1_demo` 保持 `holdout_ratio: 0`。
 
 ## Web 面板（调用链可视化）
 
@@ -151,7 +156,8 @@ python -m autolab serve --port 8000
   "n_splits": 5,
   "seed": 42,
   "budget_seconds": 120,
-  "max_rounds": 3
+  "max_rounds": 3,
+  "holdout_ratio": 0.2
 }
 ```
 

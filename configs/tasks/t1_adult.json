@@ -11,5 +11,6 @@
   "seed": 42,
   "budget_seconds": 120,
   "max_rounds": 3,
-  "notes": "预置失败点：缺失值未处理 + 类别失衡；先运行 python -m autolab prepare --task t1_adult"
+  "holdout_ratio": 0.2,
+  "notes": "预置失败点：缺失值未处理 + 类别失衡；holdout_ratio=0.2 表示先切 20% 留出集，只用于最终复验，不参与达标判定/选模；先运行 python -m autolab prepare --task t1_adult"
 }

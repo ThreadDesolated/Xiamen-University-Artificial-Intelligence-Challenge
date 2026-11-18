@@ -75,6 +75,7 @@ def run_agent(
         "rounds_used": 0,
         "final_metric": None,
         "best_metric": None,
+        "holdout": None,
         "passed": False,
         "status": "error",
         "error": "",
@@ -179,6 +180,7 @@ def run_agent(
             result = ExperimentResult.from_dict(raw)
             score = result.metric_mean(task.metric)
             passed = bool(result.ok) and evaluate_target(score, task.threshold, task.higher_is_better)
+            holdout = result.holdout or None
             trace.emit(
                 "execute",
                 tool="sandbox.execute_plan",
@@ -193,6 +195,7 @@ def run_agent(
                     "metric": task.metric,
                     "mean": score,
                     "train_metric": result.train_metric,
+                    "holdout": (holdout or {}).get("value"),
                     "seconds": result.seconds,
                     "passed": passed,
                     "error": result.error,
@@ -205,10 +208,13 @@ def run_agent(
                     "plan": final_plan.to_dict(),
                     "result": result.to_dict(),
                     "score": score,
+                    "holdout": holdout,
                     "passed": passed,
                 }
             )
             summary["rounds_used"] = round_idx
+            if holdout:
+                summary["holdout"] = holdout
             if score is not None and _better(score, best_metric, task.higher_is_better):
                 best_metric = score
                 best_plan = final_plan

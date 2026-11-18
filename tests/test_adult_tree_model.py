@@ -150,6 +150,14 @@ class AdultEndToEndTest(unittest.TestCase):
         self.assertFalse(first["passed"])
         self.assertTrue(summary["attributions"], "首轮失败后应产出归因")
 
+    def test_holdout_recorded_from_task_config(self) -> None:
+        """t1_adult 配置了 holdout_ratio=0.2，summary 应带上留出集复验结果。"""
+        holdout = self.summary.get("holdout") or {}
+        self.assertIsNotNone(holdout, "summary 缺少 holdout 字段")
+        self.assertEqual(holdout.get("n_samples"), 200)
+        self.assertTrue(0.0 <= float(holdout.get("value")) <= 1.0)
+        self.assertEqual(holdout.get("metric"), "accuracy")
+
 
 if __name__ == "__main__":
     unittest.main()

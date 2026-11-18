@@ -63,6 +63,10 @@ def print_summary(summary: dict) -> None:
     verdict = "达标 ✅" if summary.get("passed") else "未达标 ❌"
     print("-" * 72)
     print(f"  结论: {verdict}  {_fmt_metric(summary)}  轮次: {summary.get('rounds_used')} / {summary.get('max_rounds')}")
+    holdout = summary.get("holdout") or {}
+    if holdout.get("value") is not None:
+        print(f"  留出集复验: {holdout.get('metric')}={holdout.get('value'):.4f}"
+              f"（{holdout.get('n_samples')} 行，不参与达标判定）")
     print(f"  配方命中: {summary.get('recipe_hit')}   trace: {summary.get('trace_path')}")
     if summary.get("report_md"):
         print(f"  报告: {summary.get('report_md')}")
