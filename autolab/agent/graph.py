@@ -20,6 +20,7 @@ from ..schemas import ExperimentPlan, ExperimentResult, TaskSpec, new_id
 from ..store import db
 from ..tracing import TraceWriter
 from .attributor import attribute, evaluate_target, replan
+from .search import next_untried
 from .planner import llm_plan, plan_from_recipe, template_plan
 
 DEFAULT_MAX_ROUNDS = 3
@@ -163,6 +164,7 @@ def run_agent(
         best_metric = None
         best_plan = None
         final_plan = plan
+        seen = set()
         for round_idx in range(1, rounds_allowed + 1):
             final_plan, info = validate_or_fallback(final_plan, task, profile, whitelist)
             if not info.get("valid", True):
@@ -173,6 +175,18 @@ def run_agent(
                     output=info,
                 )
 
+            if final_plan.fingerprint() in seen:
+                candidate = next_untried(task, seen)
+                if candidate is None:
+                    summary["stop_reason"] = "candidate_exhausted"
+                    break
+                final_plan, _ = validate_or_fallback(candidate, task, profile, whitelist)
+                if final_plan.fingerprint() in seen:
+                    break
+            if time.time() - started >= task.budget_seconds:
+                summary["stop_reason"] = "budget_exhausted"
+                break
+            seen.add(final_plan.fingerprint())
             exec_started = time.perf_counter()
             raw = execute_plan(final_plan, task, run_id, round_idx)
             duration_ms = (time.perf_counter() - exec_started) * 1000.0
@@ -242,7 +256,14 @@ def run_agent(
             if round_idx >= rounds_allowed:
                 break
 
-            final_plan = replan(final_plan, causes, task)
+            if final_plan.source == "search":
+                candidate = next_untried(task, seen)
+                if candidate is None:
+                    summary["stop_reason"] = "candidate_exhausted"
+                    break
+                final_plan = candidate
+            else:
+                final_plan = replan(final_plan, causes, task)
             trace.emit(
                 "replan",
                 tool="attributor.replan",
@@ -251,10 +272,11 @@ def run_agent(
             )
 
         # 5) 汇总、落库、配方沉淀 -----------------------------------------
-        summary["plan"] = (final_plan if best_plan is None else final_plan).to_dict()
-        summary["final_metric"] = summary["rounds"][-1]["score"] if summary["rounds"] else None
+        summary["plan"] = (best_plan if best_plan is not None else final_plan).to_dict()
+        summary["last_metric"] = summary["rounds"][-1]["score"] if summary["rounds"] else None
+        summary["final_metric"] = best_metric
         summary["best_metric"] = best_metric
-        summary["passed"] = bool(summary["rounds"][-1]["passed"]) if summary["rounds"] else False
+        summary["passed"] = evaluate_target(best_metric, task.threshold, task.higher_is_better)
         summary["status"] = "passed" if summary["passed"] else "failed"
 
         if summary["passed"]:

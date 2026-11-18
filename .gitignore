@@ -30,3 +30,6 @@ reports/*
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Local experiment temporary files
+.tmp/

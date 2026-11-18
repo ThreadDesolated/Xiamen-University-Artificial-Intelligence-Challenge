@@ -180,7 +180,7 @@ def attribute(profile: dict, plan: ExperimentPlan, result, task) -> list[Attribu
 
 def replan(plan: ExperimentPlan, causes: list[Attribution], task) -> ExperimentPlan:
     """把归因建议合并成下一轮方案（去重、排序、可复现）。"""
-    new_plan = plan.copy_with_id("attribution")
+    new_plan = copy.deepcopy(plan).copy_with_id("attribution")
     set_model: dict | None = None
     params_patch: dict = {}
     added_ops: list[dict] = []

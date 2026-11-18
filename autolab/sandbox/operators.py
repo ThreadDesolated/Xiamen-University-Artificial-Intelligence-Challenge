@@ -222,7 +222,19 @@ class LinearGD:
         return Xb @ self.w_
 
 
+def random_forest(params):
+    from sklearn.ensemble import RandomForestClassifier
+    return RandomForestClassifier(random_state=42, n_jobs=1, **params)
+
+
+def gradient_boosting(params):
+    from sklearn.ensemble import GradientBoostingClassifier
+    return GradientBoostingClassifier(random_state=42, **params)
+
+
 MODEL_REGISTRY = {
+    "random_forest": random_forest,
+    "gradient_boosting": gradient_boosting,
     "nearest_centroid": NearestCentroid,
     "logistic_gd": LogisticGD,
     "linear_gd": LinearGD,

@@ -1,0 +1,610 @@
+{
+  "candidates": [
+    {
+      "label": "A",
+      "plan": {
+        "plan_id": "plan_20261118_215749_7ac6d3",
+        "ops": [
+          {
+            "op": "onehot",
+            "params": {
+              "max_categories": 20
+            }
+          },
+          {
+            "op": "scale_standard",
+            "params": {}
+          }
+        ],
+        "model": {
+          "kind": "logistic_gd",
+          "params": {
+            "lr": 0.1,
+            "epochs": 400,
+            "l2": 0.001,
+            "class_weight": "balanced"
+          }
+        },
+        "eval": {
+          "n_splits": 5,
+          "seed": 42
+        },
+        "source": "search",
+        "notes": ""
+      },
+      "result": {
+        "status": "ok",
+        "metrics": {
+          "accuracy": {
+            "name": "accuracy",
+            "mean": 0.7910000000000001,
+            "std": 0.014628738838327807,
+            "values": [
+              0.805,
+              0.79,
+              0.79,
+              0.805,
+              0.765
+            ],
+            "n": 5
+          },
+          "f1_macro": {
+            "name": "f1_macro",
+            "mean": 0.7523281377068518,
+            "std": 0.010139418839168992,
+            "values": [
+              0.7620137299771168,
+              0.7545582047685835,
+              0.7523292841136927,
+              0.759489377447504,
+              0.7332500922273617
+            ],
+            "n": 5
+          }
+        },
+        "seconds": 0.596,
+        "error": "",
+        "train_metric": 0.834,
+        "n_folds": 5,
+        "n_samples": 1000,
+        "fold_sizes": [
+          {
+            "fold": 1,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 2,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 3,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 4,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 5,
+            "train": 800,
+            "test": 200
+          }
+        ],
+        "network_blocked": true,
+        "stdout_tail": "{\"status\": \"ok\", \"error\": \"\"}\n",
+        "stderr_tail": ""
+      }
+    },
+    {
+      "label": "B",
+      "plan": {
+        "plan_id": "plan_20261118_215749_dbbb5f",
+        "ops": [
+          {
+            "op": "onehot",
+            "params": {
+              "max_categories": 20
+            }
+          },
+          {
+            "op": "scale_standard",
+            "params": {}
+          }
+        ],
+        "model": {
+          "kind": "logistic_gd",
+          "params": {
+            "lr": 0.1,
+            "epochs": 400,
+            "l2": 0.001,
+            "class_weight": "none"
+          }
+        },
+        "eval": {
+          "n_splits": 5,
+          "seed": 42
+        },
+        "source": "search",
+        "notes": ""
+      },
+      "result": {
+        "status": "ok",
+        "metrics": {
+          "accuracy": {
+            "name": "accuracy",
+            "mean": 0.8319999999999999,
+            "std": 0.015033296378372881,
+            "values": [
+              0.83,
+              0.85,
+              0.835,
+              0.84,
+              0.805
+            ],
+            "n": 5
+          },
+          "f1_macro": {
+            "name": "f1_macro",
+            "mean": 0.7640569980029371,
+            "std": 0.017786874852134312,
+            "values": [
+              0.7523310023310024,
+              0.794407894736842,
+              0.7688347168225281,
+              0.7629980743593541,
+              0.7417133017649591
+            ],
+            "n": 5
+          }
+        },
+        "seconds": 0.495,
+        "error": "",
+        "train_metric": 0.87575,
+        "n_folds": 5,
+        "n_samples": 1000,
+        "fold_sizes": [
+          {
+            "fold": 1,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 2,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 3,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 4,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 5,
+            "train": 800,
+            "test": 200
+          }
+        ],
+        "network_blocked": true,
+        "stdout_tail": "{\"status\": \"ok\", \"error\": \"\"}\n",
+        "stderr_tail": ""
+      }
+    },
+    {
+      "label": "C",
+      "plan": {
+        "plan_id": "plan_20261118_215749_54133c",
+        "ops": [
+          {
+            "op": "onehot",
+            "params": {
+              "max_categories": 20
+            }
+          },
+          {
+            "op": "scale_standard",
+            "params": {}
+          }
+        ],
+        "model": {
+          "kind": "logistic_gd",
+          "params": {
+            "lr": 0.1,
+            "epochs": 1000,
+            "l2": 0.001,
+            "class_weight": "none"
+          }
+        },
+        "eval": {
+          "n_splits": 5,
+          "seed": 42
+        },
+        "source": "search",
+        "notes": ""
+      },
+      "result": {
+        "status": "ok",
+        "metrics": {
+          "accuracy": {
+            "name": "accuracy",
+            "mean": 0.8319999999999999,
+            "std": 0.017204650534085233,
+            "values": [
+              0.825,
+              0.855,
+              0.83,
+              0.845,
+              0.805
+            ],
+            "n": 5
+          },
+          "f1_macro": {
+            "name": "f1_macro",
+            "mean": 0.7649265665856116,
+            "std": 0.01981610496037165,
+            "values": [
+              0.7510580034851879,
+              0.7998274374460741,
+              0.7635933806146571,
+              0.7684407096171803,
+              0.7417133017649591
+            ],
+            "n": 5
+          }
+        },
+        "seconds": 0.831,
+        "error": "",
+        "train_metric": 0.8772500000000001,
+        "n_folds": 5,
+        "n_samples": 1000,
+        "fold_sizes": [
+          {
+            "fold": 1,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 2,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 3,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 4,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 5,
+            "train": 800,
+            "test": 200
+          }
+        ],
+        "network_blocked": true,
+        "stdout_tail": "{\"status\": \"ok\", \"error\": \"\"}\n",
+        "stderr_tail": ""
+      }
+    },
+    {
+      "label": "D",
+      "plan": {
+        "plan_id": "plan_20261118_215749_21c11f",
+        "ops": [
+          {
+            "op": "onehot",
+            "params": {
+              "max_categories": 20
+            }
+          },
+          {
+            "op": "scale_standard",
+            "params": {}
+          }
+        ],
+        "model": {
+          "kind": "logistic_gd",
+          "params": {
+            "lr": 0.1,
+            "epochs": 1000,
+            "l2": 0.01,
+            "class_weight": "none"
+          }
+        },
+        "eval": {
+          "n_splits": 5,
+          "seed": 42
+        },
+        "source": "search",
+        "notes": ""
+      },
+      "result": {
+        "status": "ok",
+        "metrics": {
+          "accuracy": {
+            "name": "accuracy",
+            "mean": 0.8379999999999999,
+            "std": 0.013266499161421611,
+            "values": [
+              0.835,
+              0.855,
+              0.84,
+              0.845,
+              0.815
+            ],
+            "n": 5
+          },
+          "f1_macro": {
+            "name": "f1_macro",
+            "mean": 0.7710132982303941,
+            "std": 0.01692490608051941,
+            "values": [
+              0.7576291726341302,
+              0.7998274374460741,
+              0.7774996523432067,
+              0.7684407096171803,
+              0.7516695191113796
+            ],
+            "n": 5
+          }
+        },
+        "seconds": 0.933,
+        "error": "",
+        "train_metric": 0.8755,
+        "n_folds": 5,
+        "n_samples": 1000,
+        "fold_sizes": [
+          {
+            "fold": 1,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 2,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 3,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 4,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 5,
+            "train": 800,
+            "test": 200
+          }
+        ],
+        "network_blocked": true,
+        "stdout_tail": "{\"status\": \"ok\", \"error\": \"\"}\n",
+        "stderr_tail": ""
+      }
+    },
+    {
+      "label": "E",
+      "plan": {
+        "plan_id": "plan_20261118_215749_5540c7",
+        "ops": [
+          {
+            "op": "onehot",
+            "params": {
+              "max_categories": 20
+            }
+          },
+          {
+            "op": "scale_standard",
+            "params": {}
+          }
+        ],
+        "model": {
+          "kind": "random_forest",
+          "params": {
+            "n_estimators": 100,
+            "max_depth": 10,
+            "min_samples_leaf": 5
+          }
+        },
+        "eval": {
+          "n_splits": 5,
+          "seed": 42
+        },
+        "source": "search",
+        "notes": ""
+      },
+      "result": {
+        "status": "ok",
+        "metrics": {
+          "accuracy": {
+            "name": "accuracy",
+            "mean": 0.8479999999999999,
+            "std": 0.008717797887081356,
+            "values": [
+              0.845,
+              0.865,
+              0.845,
+              0.845,
+              0.84
+            ],
+            "n": 5
+          },
+          "f1_macro": {
+            "name": "f1_macro",
+            "mean": 0.7695649863151572,
+            "std": 0.017929049973246305,
+            "values": [
+              0.764357112994565,
+              0.8049062466129557,
+              0.760052633615852,
+              0.7555108639930597,
+              0.7629980743593541
+            ],
+            "n": 5
+          }
+        },
+        "seconds": 7.53,
+        "error": "",
+        "train_metric": 0.866,
+        "n_folds": 5,
+        "n_samples": 1000,
+        "fold_sizes": [
+          {
+            "fold": 1,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 2,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 3,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 4,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 5,
+            "train": 800,
+            "test": 200
+          }
+        ],
+        "network_blocked": true,
+        "stdout_tail": "{\"status\": \"ok\", \"error\": \"\"}\n",
+        "stderr_tail": ""
+      }
+    },
+    {
+      "label": "F",
+      "plan": {
+        "plan_id": "plan_20261118_215749_d3050a",
+        "ops": [
+          {
+            "op": "onehot",
+            "params": {
+              "max_categories": 20
+            }
+          },
+          {
+            "op": "scale_standard",
+            "params": {}
+          }
+        ],
+        "model": {
+          "kind": "gradient_boosting",
+          "params": {
+            "n_estimators": 100,
+            "max_depth": 2,
+            "min_samples_leaf": 5
+          }
+        },
+        "eval": {
+          "n_splits": 5,
+          "seed": 42
+        },
+        "source": "search",
+        "notes": ""
+      },
+      "result": {
+        "status": "ok",
+        "metrics": {
+          "accuracy": {
+            "name": "accuracy",
+            "mean": 0.857,
+            "std": 0.012884098726725137,
+            "values": [
+              0.855,
+              0.87,
+              0.835,
+              0.855,
+              0.87
+            ],
+            "n": 5
+          },
+          "f1_macro": {
+            "name": "f1_macro",
+            "mean": 0.7925821754422576,
+            "std": 0.01868782554293869,
+            "values": [
+              0.7870074547390842,
+              0.8136200716845878,
+              0.7652832604288915,
+              0.7833800186741364,
+              0.8136200716845878
+            ],
+            "n": 5
+          }
+        },
+        "seconds": 1.726,
+        "error": "",
+        "train_metric": 0.8925000000000001,
+        "n_folds": 5,
+        "n_samples": 1000,
+        "fold_sizes": [
+          {
+            "fold": 1,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 2,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 3,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 4,
+            "train": 800,
+            "test": 200
+          },
+          {
+            "fold": 5,
+            "train": 800,
+            "test": 200
+          }
+        ],
+        "network_blocked": true,
+        "stdout_tail": "{\"status\": \"ok\", \"error\": \"\"}\n",
+        "stderr_tail": ""
+      }
+    }
+  ],
+  "winner": "F",
+  "holdout": {
+    "n": 5000,
+    "metrics": {
+      "accuracy": 0.8504,
+      "f1_macro": 0.7750344004883318
+    },
+    "positive_ratio": 0.2414,
+    "note": "Unused, feature-deduplicated rows from original Adult training source; not official benchmark test."
+  },
+  "data_sha256": "159e8c0b45cfb12645778a3767f2211e61488e617b95d35abd570bfb1fe8d7f4",
+  "holdout_sha256": "aab2ba0264fb1e5f6d0ae0122a0577a43fcb96e8265dfe077aa115819d05d692",
+  "seed": 42,
+  "n_splits": 5
+}

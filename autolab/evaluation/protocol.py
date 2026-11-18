@@ -80,6 +80,7 @@ def run_cv(
 
     metric_values: list[float] = []
     train_values: list[float] = []
+    extra_values = {name: [] for name in ("accuracy", "f1_macro") if is_classification and name != metric}
     fold_sizes: list[dict] = []
     for k, test_idx in enumerate(folds):
         train_idx = np.concatenate([f for j, f in enumerate(folds) if j != k])
@@ -100,6 +101,8 @@ def run_cv(
         model = build_model(plan.model).fit(X_tr_t, y_tr)
         pred = model.predict(X_te_t)
         metric_values.append(compute(metric, y_te, pred))
+        for name in extra_values:
+            extra_values[name].append(compute(name, y_te, pred))
         train_values.append(compute(metric, y_tr, model.predict(X_tr_t)))
         fold_sizes.append({"fold": k + 1, "train": int(len(X_tr)), "test": int(len(X_te))})
 
@@ -120,4 +123,6 @@ def run_cv(
         "n_samples": int(len(y)),
         "fold_sizes": fold_sizes,
     }
+    for name, vals in extra_values.items():
+        result["metrics"][name] = Metrics(name=name, mean=float(np.mean(vals)), std=float(np.std(vals)), values=vals, n=len(vals)).to_dict()
     return result

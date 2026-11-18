@@ -47,6 +47,7 @@ def env_info() -> dict:
         "platform": platform.platform(),
         "numpy": _pkg_version("numpy"),
         "pandas": _pkg_version("pandas"),
+        "scikit-learn": _pkg_version("scikit-learn"),
         "seed": config.SEED,
         "model": config.MODEL,
         "llm_enabled": bool(config.API_KEY),
@@ -182,7 +183,8 @@ def export_bundle(summary: dict) -> dict:
     (run_dir / "report.md").write_text(report_text, encoding="utf-8")
 
     dump_json(run_dir / "plan.json", summary.get("plan") or {})
-    dump_json(run_dir / "result.json", (summary.get("rounds") or [{}])[-1].get("result") or {})
+    selected = next((r for r in summary.get("rounds", []) if r.get("plan", {}).get("plan_id") == summary.get("plan", {}).get("plan_id")), {})
+    dump_json(run_dir / "result.json", selected.get("result") or {})
     dump_json(run_dir / "profile.json", summary.get("profile") or {})
     dump_json(run_dir / "env.json", summary.get("env") or {})
     dump_json(
