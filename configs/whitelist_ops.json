@@ -75,6 +75,16 @@
         "epochs": {"type": "int", "min": 50, "max": 2000, "default": 300},
         "l2": {"type": "float", "min": 0.0, "max": 1.0, "default": 0.001}
       }
+    },
+    "random_forest": {
+      "desc": "sklearn 随机森林（需要 scikit-learn；线性模型欠拟合时升级容量用）",
+      "tasks": ["binary_classification", "multiclass_classification"],
+      "params": {
+        "n_estimators": {"type": "int", "min": 50, "max": 500, "default": 300},
+        "max_depth": {"type": "int", "min": 2, "max": 20, "default": 8},
+        "min_samples_leaf": {"type": "int", "min": 1, "max": 20, "default": 1},
+        "class_weight": {"type": "enum", "values": ["none", "balanced"], "default": "none"}
+      }
     }
   },
   "limits": {

@@ -3,7 +3,8 @@
 设计原则：
 - 算子全部"只在训练折上拟合"，再 transform 测试折，杜绝泄漏；
 - 执行后若仍有非数值列 / 缺失值，直接抛 ValidationError —— 这本身就是可归因的失败信号；
-- W2 起在 whitelist_ops.json 里追加 sklearn/flaml 模型即可，执行框架不变。
+- numpy 模型保证最小依赖即可跑通；scikit-learn 树模型是可选"重型执行内核"，
+  只在真实表格任务需要升级模型容量时启用（见 whitelist_ops.json 的 random_forest）。
 """
 from __future__ import annotations
 
@@ -11,6 +12,11 @@ import numpy as np
 import pandas as pd
 
 from ..schemas import ValidationError
+
+try:  # scikit-learn 为可选依赖：缺失时仅 random_forest 不可用，demo 仍可零依赖运行
+    from sklearn.ensemble import RandomForestClassifier
+except ImportError:  # pragma: no cover - 只可能出现在最小依赖环境
+    RandomForestClassifier = None
 
 # 由评测协议在切折后处理（需要同时裁剪 X 与 y），Pipeline 中跳过
 SKIP_OPS = {"drop_missing_rows"}
@@ -222,10 +228,49 @@ class LinearGD:
         return Xb @ self.w_
 
 
+class RandomForest:
+    """sklearn 随机森林分类器（可选依赖 scikit-learn）。
+
+    用途：UCI Adult 这类真实表格任务里，numpy 线性模型上限约 0.845，
+    达不到 0.85 阈值；浅层随机森林可稳定到 0.85+，因此把它作为"升级模型容量"动作。
+    n_jobs 固定为 1（顺序执行），避免在沙箱子进程/受限环境里创建线程池或管道。
+    """
+
+    def __init__(self, params: dict | None = None):
+        p = params or {}
+        self.n_estimators = int(p.get("n_estimators", 300))
+        self.max_depth = int(p.get("max_depth", 8))
+        self.min_samples_leaf = int(p.get("min_samples_leaf", 1))
+        self.class_weight = str(p.get("class_weight", "none"))
+        self.model_ = None
+
+    def fit(self, X, y) -> "RandomForest":
+        if RandomForestClassifier is None:
+            raise ValidationError(
+                "random_forest 模型依赖 scikit-learn，请先执行 pip install -r requirements.txt"
+            )
+        self.model_ = RandomForestClassifier(
+            n_estimators=self.n_estimators,
+            max_depth=self.max_depth,
+            min_samples_leaf=self.min_samples_leaf,
+            class_weight="balanced" if self.class_weight == "balanced" else None,
+            random_state=42,
+            n_jobs=1,
+        )
+        self.model_.fit(np.asarray(X, dtype=np.float64), np.asarray(y))
+        return self
+
+    def predict(self, X) -> np.ndarray:
+        if self.model_ is None:
+            raise ValidationError("random_forest 模型尚未训练")
+        return self.model_.predict(np.asarray(X, dtype=np.float64))
+
+
 MODEL_REGISTRY = {
     "nearest_centroid": NearestCentroid,
     "logistic_gd": LogisticGD,
     "linear_gd": LinearGD,
+    "random_forest": RandomForest,
 }
 
 

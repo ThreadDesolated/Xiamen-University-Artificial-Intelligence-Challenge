@@ -23,7 +23,7 @@ AutoLab 让 Agent 像研究生一样做实验：给它一句话目标（例如"�
 | 特性 | 说明 |
 |---|---|
 | 指标即奖励的闭环 | 用真实评测指标（K 折交叉验证均值±标准差）作为奖励信号；达标/继续迭代由代码规则与预算决定，而不是模型"自称完成" |
-| 失败归因驱动重规划 | 把"实验失败"当一等公民：输出结构化失败原因和修复动作，再生成下一轮方案 |
+| 失败归因驱动重规划 | 把"实验失败"当一等公民：输出结构化失败原因和修复动作，再生成下一轮方案；线性模型触顶时自动升级到随机森林 |
 | 跨任务配方迁移 | 成功方案以"任务画像 + 方案 JSON"沉淀到 SQLite 配方库，新任务先检索复用 |
 | 受限动作空间 | 方案是一份 JSON，只允许白名单算子/模型；做 Schema 与白名单双重校验，非法方案回退模板方案 |
 | 安全沙箱 | 子进程隔离、超时即杀、socket 级禁网、不依赖 Docker |
@@ -39,11 +39,14 @@ python -m autolab demo
 `demo` 使用内置合成任务（缺失值 + 类别失衡的高维表格分类），完整走一遍"弱 baseline 失败 → 归因 → 重规划 → 达标 → 导出复现包"：
 
 ```
-[round 1] plan=template     metric=0.7xxx (<0.85) attribution=[missing_values_unhandled, class_imbalance, feature_scale]
+[round 1] plan=template     metric=0.7xxx (<0.85) attribution=[missing_values_poor_imputation, class_imbalance, feature_scale]
 [round 2] plan=attribution  metric=0.8xxx (>=0.85) OK
 trace:  traces/<run_id>.jsonl
 report: reports/<run_id>.zip
 ```
+
+> 未安装 scikit-learn 也能跑：归因只会升级到 numpy 线性模型（`logistic_gd`），demo 的合成任务照样达标。
+> 装有 scikit-learn 时，欠拟合会升级到白名单里的 `random_forest`（更接近真实数据任务的指标上限）。
 
 装齐完整依赖后：
 
@@ -54,6 +57,10 @@ python -m autolab serve --port 8000              # 启动 Web 面板 + API（见
 python -m autolab replay --run-id <run_id>       # 回放一次运行（演示断网兜底用）
 python -m unittest discover -s tests -v          # 跑测试
 ```
+
+`t1_adult` 是真实数据任务（1000 行 Adult 子集，正负比 750/250）：线性模型上限约 0.845，达不到 0.85 阈值，
+归因会在第 2 轮把模型升级为随机森林，实测 0.5230 → 0.8560，两轮达标（需 `pip install -r requirements.txt`，
+其中包含 scikit-learn；跳过的旧报告 `reports/run_20261118_204250_82d7aa` 可作修复前对比）。
 
 ## Web 面板（调用链可视化）
 
@@ -78,8 +85,10 @@ python -m autolab serve --port 8000
 ## 环境安装
 
 - Python 3.10+（开发机 3.12）
-- 最小运行：`pip install -r requirements-core.txt`（numpy、pandas）
+- 最小运行：`pip install -r requirements-core.txt`（numpy、pandas）；demo/合成任务零额外依赖
 - 完整开发：`pip install -r requirements.txt`（W2 起需要 scikit-learn / flaml / fastapi / langgraph）
+- 真实数据任务（如 `t1_adult`）建议装完整依赖：归因升级用的 `random_forest` 模型依赖 scikit-learn；
+  未安装时自动退回 numpy 线性模型，demo 与合成任务不受影响。
 - 大模型（可选）：`cp .env.example .env` 后填 `DEEPSEEK_API_KEY`。
   未配置 Key 时自动退化为 **模板规划器 + 规则归因**——这是现场断网/限流时的兜底路径，永远可用。
 

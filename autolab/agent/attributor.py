@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import copy
+import importlib.util
 
 from ..schemas import Attribution, ExperimentPlan
 
@@ -26,6 +27,77 @@ def _op_names(plan: ExperimentPlan) -> list[str]:
     return plan.op_names()
 
 
+# 模型容量等级：重规划时若有多个 set_model 建议，取容量最高的一条（不能被弱模型建议覆盖）
+_CAPACITY_RANK = {
+    "nearest_centroid": 0,
+    "logistic_gd": 1,
+    "linear_gd": 1,
+    "random_forest": 2,
+}
+_LINEAR_KINDS = ("logistic_gd", "linear_gd")
+_STRONG_LINEAR_MODEL = {
+    "kind": "logistic_gd",
+    "params": {"lr": 0.1, "epochs": 400, "l2": 0.001, "class_weight": "balanced"},
+}
+_TREE_MODEL = {
+    "kind": "random_forest",
+    "params": {"n_estimators": 300, "max_depth": 8, "min_samples_leaf": 1},
+}
+
+
+def _sklearn_available() -> bool:
+    """随机森林依赖 scikit-learn；最小依赖环境要能自动退回线性模型，保证 demo 可跑。"""
+    try:
+        return importlib.util.find_spec("sklearn") is not None
+    except (ImportError, ValueError):  # pragma: no cover - 异常环境兜底
+        return False
+
+
+def _capacity_fix(model_kind: str, model_params: dict) -> dict:
+    """欠拟合 / 未知缺口时升级模型容量。
+
+    - 线性模型（含最近质心）→ sklearn 随机森林（scikit-learn 可用时）；
+    - 已是随机森林 → 加深 / 加树；
+    - 最小依赖环境（无 scikit-learn）→ 退回 logistic_gd + balanced，保持零依赖 demo 可跑。
+    """
+    if model_kind == "random_forest":
+        depth = int(model_params.get("max_depth", 8) or 8)
+        n_estimators = int(model_params.get("n_estimators", 300) or 300)
+        return {
+            "set_model_params": {
+                "max_depth": min(20, depth + 2),
+                "n_estimators": min(500, max(300, n_estimators + 100)),
+            }
+        }
+    if _sklearn_available():
+        fix = copy.deepcopy(_TREE_MODEL)
+        if str(model_params.get("class_weight", "none")) == "balanced":
+            fix["params"]["class_weight"] = "balanced"
+        return {"set_model": fix}
+    return {"set_model": copy.deepcopy(_STRONG_LINEAR_MODEL)}
+
+
+def _regularize_fix(model_kind: str, model_params: dict) -> dict:
+    """过拟合时按模型类型收缩容量（参数必须在白名单范围内）。"""
+    if model_kind in _LINEAR_KINDS:
+        return {"set_model_params": {"l2": 0.01, "epochs": 200}}
+    if model_kind == "random_forest":
+        depth = int(model_params.get("max_depth", 8) or 8)
+        return {"set_model_params": {"max_depth": max(2, depth - 2)}}
+    return {"set_model": copy.deepcopy(_STRONG_LINEAR_MODEL)}
+
+
+def _timeout_fix(model_kind: str, model_params: dict) -> dict:
+    """预算超时时减少折数，并按模型类型降低单次训练成本。"""
+    fix: dict = {"reduce_splits": True}
+    if model_kind in _LINEAR_KINDS:
+        fix["set_model_params"] = {"epochs": 150}
+    elif model_kind == "random_forest":
+        n_estimators = int(model_params.get("n_estimators", 300) or 300)
+        fix["set_model_params"] = {"n_estimators": max(50, n_estimators // 2)}
+    return fix
+
+
 def attribute(profile: dict, plan: ExperimentPlan, result, task) -> list[Attribution]:
     """返回按置信度排序的归因列表（空表示无法归因）。"""
     causes: list[Attribution] = []
@@ -37,12 +109,8 @@ def attribute(profile: dict, plan: ExperimentPlan, result, task) -> list[Attribu
     op_names = _op_names(plan)
     model_params = (plan.model or {}).get("params") or {}
     model_kind = str((plan.model or {}).get("kind", ""))
-    # 最近质心这类弱 baseline 不支持 class_weight；归因时直接升级为可加权的线性模型
+    # 最近质心这类弱 baseline 不支持 class_weight；归因时先升级到可加权的线性模型
     weak_model = model_kind == "nearest_centroid"
-    strong_model = {
-        "kind": "logistic_gd",
-        "params": {"lr": 0.1, "epochs": 400, "l2": 0.001, "class_weight": "balanced"},
-    }
 
     if result.status == "timeout":
         return [
@@ -50,7 +118,7 @@ def attribute(profile: dict, plan: ExperimentPlan, result, task) -> list[Attribu
                 cause="budget_exceeded",
                 confidence=0.9,
                 evidence=result.error,
-                fix={"reduce_splits": True, "set_model_params": {"epochs": 150}},
+                fix=_timeout_fix(model_kind, model_params),
             )
         ]
     if result.status in ("error", "invalid"):
@@ -63,7 +131,7 @@ def attribute(profile: dict, plan: ExperimentPlan, result, task) -> list[Attribu
                 "remove_ops": ["impute_zero"],
             }
             if weak_model:
-                error_fix["set_model"] = copy.deepcopy(strong_model)
+                error_fix["set_model"] = copy.deepcopy(_STRONG_LINEAR_MODEL)
         return [
             Attribution(
                 cause="execution_failed",
@@ -85,7 +153,7 @@ def attribute(profile: dict, plan: ExperimentPlan, result, task) -> list[Attribu
             if "impute_zero" in op_names:
                 fix["remove_ops"] = ["impute_zero"]
             if weak_model:
-                fix["set_model"] = copy.deepcopy(strong_model)
+                fix["set_model"] = copy.deepcopy(_STRONG_LINEAR_MODEL)
             causes.append(
                 Attribution(
                     cause="missing_values_poor_imputation",
@@ -107,7 +175,7 @@ def attribute(profile: dict, plan: ExperimentPlan, result, task) -> list[Attribu
         and str(model_params.get("class_weight", "none")) != "balanced"
     ):
         imbalance_fix = (
-            {"set_model": copy.deepcopy(strong_model)}
+            {"set_model": copy.deepcopy(_STRONG_LINEAR_MODEL)}
             if weak_model
             else {"set_model_params": {"class_weight": "balanced"}}
         )
@@ -141,7 +209,7 @@ def attribute(profile: dict, plan: ExperimentPlan, result, task) -> list[Attribu
                     cause="overfit",
                     confidence=0.55,
                     evidence=f"训练折指标 {train_score:.4f} 明显好于验证折 {score:.4f}（gap={gap:.3f}）",
-                    fix={"set_model_params": {"l2": 0.01, "epochs": 200}},
+                    fix=_regularize_fix(model_kind, model_params),
                 )
             )
         elif float(train_score) < (task.threshold - 0.04) and task.higher_is_better:
@@ -150,12 +218,7 @@ def attribute(profile: dict, plan: ExperimentPlan, result, task) -> list[Attribu
                     cause="underfit",
                     confidence=0.6,
                     evidence=f"训练折指标也只有 {train_score:.4f}，模型容量/参数明显不足",
-                    fix={
-                        "set_model": {
-                            "kind": "logistic_gd",
-                            "params": {"lr": 0.1, "epochs": 400, "l2": 0.001, "class_weight": "balanced"},
-                        }
-                    },
+                    fix=_capacity_fix(model_kind, model_params),
                 )
             )
 
@@ -166,10 +229,7 @@ def attribute(profile: dict, plan: ExperimentPlan, result, task) -> list[Attribu
                 confidence=0.3,
                 evidence=f"指标 {score:.4f} 未达阈值 {task.threshold}，规则库未命中明确原因",
                 fix={
-                    "set_model": {
-                        "kind": "logistic_gd",
-                        "params": {"lr": 0.1, "epochs": 400, "l2": 0.001, "class_weight": "balanced"},
-                    },
+                    **_capacity_fix(model_kind, model_params),
                     "add_ops": [{"op": "scale_standard", "params": {}}],
                 },
             )
@@ -182,6 +242,7 @@ def replan(plan: ExperimentPlan, causes: list[Attribution], task) -> ExperimentP
     """把归因建议合并成下一轮方案（去重、排序、可复现）。"""
     new_plan = plan.copy_with_id("attribution")
     set_model: dict | None = None
+    set_model_rank = -1
     params_patch: dict = {}
     added_ops: list[dict] = []
 
@@ -194,8 +255,13 @@ def replan(plan: ExperimentPlan, causes: list[Attribution], task) -> ExperimentP
                 added_ops.append(dict(op))
         for name in fix.get("remove_ops", []):
             new_plan.ops = [o for o in new_plan.ops if o.get("op") != name]
-        if "set_model" in fix and set_model is None:
-            set_model = copy.deepcopy(fix["set_model"])
+        candidate = fix.get("set_model")
+        if candidate:
+            rank = _CAPACITY_RANK.get(str(candidate.get("kind", "")), 0)
+            # 多条建议同时升级模型时取容量最高者，避免弱模型建议覆盖"升级树模型"
+            if rank > set_model_rank:
+                set_model = copy.deepcopy(candidate)
+                set_model_rank = rank
         params_patch.update(fix.get("set_model_params") or {})
         if fix.get("reduce_splits"):
             new_plan.eval["n_splits"] = max(2, int(new_plan.eval.get("n_splits", 5)) - 1)
