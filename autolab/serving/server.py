@@ -165,6 +165,15 @@ def create_app():
     web_dir = Path(__file__).with_name("web")
     app.mount("/panel", StaticFiles(directory=web_dir), name="panel")
 
+    @app.middleware("http")
+    async def _no_cache_panel(request, call_next):
+        """面板静态资源不缓存，避免更新后浏览器仍加载旧 CSS/JS。"""
+        response = await call_next(request)
+        path = request.url.path
+        if path == "/" or path.startswith("/panel"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.get("/", include_in_schema=False)
     def dashboard():
         return FileResponse(web_dir / "index.html")
