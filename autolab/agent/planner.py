@@ -22,6 +22,9 @@ def template_plan(profile: dict, task) -> ExperimentPlan:
         # 故意先用零填充：比中位数/均值更粗，给归因阶段留出"改进空间"
         ops.append({"op": "impute_zero", "params": {}})
 
+    if profile.get("feature_types", {}).get("categorical"):
+        ops.append({"op": "onehot", "params": {"max_categories": 20}})
+
     if task.task_type == "regression":
         model = {"kind": "linear_gd", "params": {"lr": 0.05, "epochs": 300, "l2": 0.001}}
     else:
