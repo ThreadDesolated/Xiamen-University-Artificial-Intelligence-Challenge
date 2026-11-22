@@ -121,6 +121,8 @@ CV 均值: 0.85375  类别: [0, 1]  sklearn: 1.9.1
 - 训练后参数：随机森林的 `feature_importances_`、`estimators_`（每棵树），numpy 线性模型的 `W_` / `w_` 都会汇总展示；
 - `--json` 输出结构化摘要（`meta` / `plan` / `pipeline` / `model.trained`），便于二次处理。
 
+Windows 下也可以直接双击 `查看模型.cmd`：不带参数会先列最近 5 条运行再提示输入 run_id；也可以带参数运行，例如 `查看模型.cmd <run_id> --features`。
+
 ## Web 面板（调用链可视化）
 
 ```bash
