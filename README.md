@@ -57,6 +57,7 @@ python -m autolab prepare --task t1_adult        # 下载并准备固定子集�
 python -m autolab run --task configs/tasks/t1_adult.json
 python -m autolab serve --port 8000              # 启动 Web 面板 + API（见下节）
 python -m autolab replay --run-id <run_id>       # 回放一次运行（演示断网兜底用）
+python -m autolab predict --model reports/<run_id>/model.joblib --csv data.csv   # 用导出的最终模型预测
 python -m unittest discover -s tests -v          # 跑测试
 ```
 
@@ -67,6 +68,18 @@ python -m unittest discover -s tests -v          # 跑测试
 该任务的配置启用了留出集复验（`holdout_ratio: 0.2`）：1000 行中先切 200 行留出集，K 折只在其余 800 行上做，
 达标判定仍看 CV 均值；跑完再在留出集上评估一次（实测 CV 0.8538、留出集 0.8350），
 报告与 CLI 都会打印这个"对外泛化"成绩，避免多轮重规划把验证集调过头。`t1_demo` 保持 `holdout_ratio: 0`。
+
+## 用导出的最终模型预测（CLI）
+
+跑完任务后 `reports/<run_id>/model.joblib` 就是最终模型，可以直接对**新数据**预测，不需要重新训练：
+
+```bash
+python -m autolab predict --model reports/<run_id>/model.joblib --csv new_data.csv --out preds.csv --proba
+```
+
+- 默认按模型元信息里的 `target` 列名从 CSV 中剔除标签列；数据是纯特征（没有标签）也能直接预测；
+- `--proba`：分类任务额外输出正类概率列；`--target` 可手动指定目标列名；
+- `--out`：结果写 CSV（`row,prediction[,probability]`）；不加 `--out` 只打印前 10 行和预测分布（分类）或统计（回归）。
 
 ## Web 面板（调用链可视化）
 

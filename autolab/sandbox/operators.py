@@ -199,6 +199,12 @@ class LogisticGD:
         Xb = np.hstack([X, np.ones((len(X), 1))])
         return self.classes_[np.argmax(Xb @ self.W_, axis=1)]
 
+    def predict_proba(self, X) -> np.ndarray:
+        """返回每个类别的 softmax 概率（列顺序与 classes_ 一致）。"""
+        X = np.asarray(X, dtype=np.float64)
+        Xb = np.hstack([X, np.ones((len(X), 1))])
+        return _softmax(Xb @ self.W_)
+
 
 class LinearGD:
     """numpy 实现的线性回归（梯度下降 + L2）。"""
@@ -264,6 +270,12 @@ class RandomForest:
         if self.model_ is None:
             raise ValidationError("random_forest 模型尚未训练")
         return self.model_.predict(np.asarray(X, dtype=np.float64))
+
+    def predict_proba(self, X) -> np.ndarray:
+        """返回 sklearn 随机森林的类别概率（列顺序与 classes_ 一致）。"""
+        if self.model_ is None:
+            raise ValidationError("random_forest 模型尚未训练")
+        return self.model_.predict_proba(np.asarray(X, dtype=np.float64))
 
 
 MODEL_REGISTRY = {

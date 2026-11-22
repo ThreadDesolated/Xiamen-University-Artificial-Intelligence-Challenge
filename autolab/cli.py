@@ -6,6 +6,7 @@
   python -m autolab run --task t1_demo --plan reports/<run>/plan.json   # 按方案原样复现
   python -m autolab prepare --task t1_adult   # 下载并准备真实数据集
   python -m autolab replay --run-id <run_id>  # 回放一次运行的调用链
+  python -m autolab predict --model reports/<run_id>/model.joblib --csv data.csv  # 用导出的最终模型预测
   python -m autolab serve                     # 启动 trace 面板后端（需 Web 依赖）
   python -m autolab init-db                   # 初始化 SQLite
   python -m autolab list                      # 查看历史运行
@@ -143,6 +144,92 @@ def _cmd_replay(args) -> int:
     return 0
 
 
+def _cmd_predict(args) -> int:
+    """用导出的最终模型对新数据做预测（不依赖运行历史，可离线使用）。"""
+    import pandas as pd
+
+    from .evaluation.model_store import load_model, predict
+
+    model_path = pathlib.Path(args.model)
+    if not model_path.is_file():
+        print(f"模型文件不存在: {model_path}", file=sys.stderr)
+        return 2
+    try:
+        payload = load_model(model_path)
+    except Exception as exc:  # noqa: BLE001 - 统一转成可读错误
+        print(f"无法加载模型（不是 AutoLab 导出的文件？）: {exc}", file=sys.stderr)
+        return 2
+
+    meta = payload.get("meta") or {}
+    csv_path = pathlib.Path(args.csv)
+    if not csv_path.is_file():
+        print(f"数据文件不存在: {csv_path}", file=sys.stderr)
+        return 2
+    try:
+        df = pd.read_csv(csv_path)
+    except Exception as exc:  # noqa: BLE001
+        print(f"无法读取数据文件: {exc}", file=sys.stderr)
+        return 2
+
+    target = args.target or meta.get("target")
+    if args.target and target not in df.columns:
+        print(f"数据里没有目标列 {target!r}（可用 --target 指定其他列名）", file=sys.stderr)
+        return 2
+    features = df.drop(columns=[target]) if target and target in df.columns else df
+
+    try:
+        predictions = predict(payload, features)
+    except Exception as exc:  # noqa: BLE001
+        print(f"预测失败: {exc}", file=sys.stderr)
+        return 2
+
+    probabilities = None
+    if args.proba:
+        classes = meta.get("classes")
+        if not classes:
+            print("该模型是回归模型，忽略 --proba", file=sys.stderr)
+        else:
+            try:
+                import numpy as np
+
+                proba = payload["model"].predict_proba(payload["pipeline"].transform(features))
+                probabilities = [float(row[-1]) for row in np.asarray(proba)]
+            except Exception as exc:  # noqa: BLE001 - 概率不是必需能力
+                print(f"该模型不支持 predict_proba，忽略 --proba: {exc}", file=sys.stderr)
+
+    print("=" * 68)
+    print(f"AutoLab predict: {model_path}")
+    print(f"  任务: {meta.get('task_id')}  模型: {meta.get('model_kind')}  "
+          f"CV: {meta.get('cv_mean')}")
+    print(f"  数据: {csv_path}  行数: {len(df)}  特征列: {len(features.columns)}")
+    print("=" * 68)
+    print(f"  预测前 10 行: {predictions[:10]}")
+    if probabilities is not None:
+        print(f"  正类概率前 10 行: {[round(p, 4) for p in probabilities[:10]]}")
+
+    if args.out:
+        out_df = pd.DataFrame({"row": range(1, len(predictions) + 1), "prediction": predictions})
+        if probabilities is not None:
+            out_df["probability"] = probabilities
+        out_path = pathlib.Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_df.to_csv(out_path, index=False, encoding="utf-8-sig")
+        print(f"  已写出: {out_path}")
+    else:
+        classes = meta.get("classes")
+        if classes:
+            from collections import Counter
+
+            counts = Counter(str(v) for v in predictions)
+            print(f"  预测分布: {dict(sorted(counts.items()))}")
+        else:
+            import numpy as np
+
+            values = np.asarray(predictions, dtype=float)
+            print(f"  预测统计: min={values.min():.4f}  mean={values.mean():.4f}  max={values.max():.4f}")
+    return 0
+
+
 def _cmd_serve(args) -> int:
     try:
         import uvicorn
@@ -208,6 +295,15 @@ def build_parser() -> argparse.ArgumentParser:
     replay_p.add_argument("--trace", default=None)
     replay_p.add_argument("--delay", type=float, default=0.0)
     replay_p.set_defaults(func=_cmd_replay)
+
+    predict_p = sub.add_parser("predict", help="用导出的最终模型对新数据预测")
+    predict_p.add_argument("--model", required=True, help="模型文件（reports/<run_id>/model.joblib）")
+    predict_p.add_argument("--csv", required=True, help="待预测数据 CSV（特征列与训练数据一致）")
+    predict_p.add_argument("--target", default=None,
+                           help="目标列名（默认取模型元信息里的 target；存在则从特征中剔除）")
+    predict_p.add_argument("--out", default=None, help="预测结果输出 CSV 路径")
+    predict_p.add_argument("--proba", action="store_true", help="分类任务同时输出正类概率")
+    predict_p.set_defaults(func=_cmd_predict)
 
     serve = sub.add_parser("serve", help="启动 trace 面板后端（FastAPI + SSE）")
     serve.add_argument("--host", default="127.0.0.1")
