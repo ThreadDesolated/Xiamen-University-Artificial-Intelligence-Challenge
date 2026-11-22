@@ -8,6 +8,7 @@
   python -m autolab replay --run-id <run_id>  # 回放一次运行的调用链
   python -m autolab predict --model reports/<run_id>/model.joblib --csv data.csv  # 用导出的最终模型预测
   python -m autolab model-info --model reports/<run_id>/model.joblib  # 查看模型全貌（超参/特征/重要性）
+  python -m autolab model-info --run-id <run_id>                      # 同上，直接按 run_id 查（推荐）
   python -m autolab serve                     # 启动 trace 面板后端（需 Web 依赖）
   python -m autolab init-db                   # 初始化 SQLite
   python -m autolab list                      # 查看历史运行
@@ -241,14 +242,34 @@ def _brief(values, limit: int = 6) -> str:
 
 
 def _cmd_model_info(args) -> int:
-    """打印导出的模型文件全貌：元信息、实验方案、预处理参数、特征名单、训练结果。"""
+    """打印导出的模型文件全貌：元信息、实验方案、预处理参数、特征名单、训练结果。
+
+    模型文件可用 `--model` 直接指定，也可以用 `--run-id` 自动定位
+    `reports/<run_id>/model.joblib`。
+    """
+    import re
+
     import numpy as np
 
     from .evaluation.model_store import load_model
 
-    model_path = pathlib.Path(args.model)
+    model_arg = getattr(args, "model", None)
+    run_id = getattr(args, "run_id", None)
+    if model_arg:
+        model_path = pathlib.Path(model_arg)
+    elif run_id:
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", str(run_id)):
+            print(f"非法的 run_id: {run_id!r}", file=sys.stderr)
+            return 2
+        model_path = config.REPORT_DIR / str(run_id) / "model.joblib"
+    else:
+        print("需要 --model 或 --run-id 之一", file=sys.stderr)
+        return 2
     if not model_path.is_file():
-        print(f"模型文件不存在: {model_path}", file=sys.stderr)
+        if run_id and not model_arg:
+            print(f"该运行没有导出模型: {model_path}", file=sys.stderr)
+        else:
+            print(f"模型文件不存在: {model_path}", file=sys.stderr)
         return 2
     try:
         payload = load_model(model_path)
@@ -530,8 +551,9 @@ def build_parser() -> argparse.ArgumentParser:
     predict_p.add_argument("--proba", action="store_true", help="分类任务同时输出正类概率")
     predict_p.set_defaults(func=_cmd_predict)
 
-    model_info = sub.add_parser("model-info", help="查看导出的模型文件：超参数、预处理参数、特征名单、重要性/权重")
-    model_info.add_argument("--model", required=True, help="模型文件（reports/<run_id>/model.joblib 或面板下载的）")
+    model_info = sub.add_parser("model-info", help="查看导出模型：超参数、预处理参数、特征名单、重要性/权重")
+    model_info.add_argument("--model", default=None, help="模型文件路径（reports/<run_id>/model.joblib 或面板下载的）")
+    model_info.add_argument("--run-id", default=None, help="按运行 id 查模型（自动定位 reports/<run_id>/model.joblib）")
     model_info.add_argument("--top", type=int, default=15, help="重要性/权重显示前 N 项（默认 15）")
     model_info.add_argument("--features", action="store_true", help="打印全部特征名")
     model_info.add_argument("--json", action="store_true", help="以 JSON 输出完整信息（便于脚本处理）")

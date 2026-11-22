@@ -7,10 +7,12 @@ import json
 import pathlib
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 import pandas as pd
 
+from autolab import config
 from autolab.cli import main
 from autolab.evaluation import model_store, protocol
 from autolab.schemas import ExperimentPlan
@@ -103,6 +105,34 @@ class ModelInfoTest(unittest.TestCase):
         code, out, err = _run_info("--model", str(self.tmp / "nope.joblib"))
         self.assertEqual(code, 2)
         self.assertIn("模型文件不存在", err)
+
+    def test_run_id_resolves_model_under_report_dir(self) -> None:
+        run_id = "run_20260101_000000_aaaaaa"
+        run_dir = self.tmp / run_id
+        run_dir.mkdir(parents=True)
+        trained = self._train("random_forest")
+        (run_dir / "model.joblib").write_bytes(trained.read_bytes())
+        with mock.patch.object(config, "REPORT_DIR", self.tmp):
+            code, out, err = _run_info("--run-id", run_id, "--top", "3")
+        self.assertEqual(code, 0, err)
+        self.assertIn(run_id, out)
+        self.assertIn("特征重要性", out)
+
+    def test_run_id_without_model_returns_2(self) -> None:
+        with mock.patch.object(config, "REPORT_DIR", self.tmp):
+            code, out, err = _run_info("--run-id", "run_20260101_000000_bbbbbb")
+        self.assertEqual(code, 2)
+        self.assertIn("该运行没有导出模型", err)
+
+    def test_illegal_run_id_returns_2(self) -> None:
+        code, out, err = _run_info("--run-id", "bad id/../x")
+        self.assertEqual(code, 2)
+        self.assertIn("非法的 run_id", err)
+
+    def test_requires_model_or_run_id(self) -> None:
+        code, out, err = _run_info()
+        self.assertEqual(code, 2)
+        self.assertIn("需要 --model 或 --run-id", err)
 
     def test_foreign_file_returns_2(self) -> None:
         foreign = self.tmp / "foreign.joblib"

@@ -58,7 +58,7 @@ python -m autolab run --task configs/tasks/t1_adult.json
 python -m autolab serve --port 8000              # 启动 Web 面板 + API（见下节）
 python -m autolab replay --run-id <run_id>       # 回放一次运行（演示断网兜底用）
 python -m autolab predict --model reports/<run_id>/model.joblib --csv data.csv   # 用导出的最终模型预测
-python -m autolab model-info --model reports/<run_id>/model.joblib               # 查看模型全貌（超参/特征/重要性）
+python -m autolab model-info --run-id <run_id>                   # 按 run_id 查看模型全貌（超参/特征/重要性）
 python -m unittest discover -s tests -v          # 跑测试
 ```
 
@@ -84,18 +84,19 @@ python -m autolab predict --model reports/<run_id>/model.joblib --csv new_data.c
 
 ## 查看导出的模型（CLI）
 
-`model.joblib` 是二进制文件，用 `model-info` 一次看全：元信息、实验方案、预处理参数、特征名单、训练结果（树的数量/节点数/重要性或权重摘要）：
+`model.joblib` 是二进制文件，用 `model-info` 一次看全：元信息、实验方案、预处理参数、特征名单、训练结果（树的数量/节点数/重要性或权重摘要）。**给 run_id 就行**，会自动定位 `reports/<run_id>/model.joblib`：
 
 ```bash
-# 默认打印前 15 项重要性/权重
-python -m autolab model-info --model reports/<run_id>/model.joblib
+# 最常用：按 run_id 查（run_id 在面板历史或 reports 目录名里都能看到）
+python -m autolab model-info --run-id run_20261122_230052_2c15a7
 
-# 看全部特征名 + 全部预处理参数
-python -m autolab model-info --model reports/<run_id>/model.joblib --features
+# 也可以直接给文件路径（比如面板下载到本地的模型）
+python -m autolab model-info --model joblibs/run_20261122_230052_2c15a7-model.joblib
 
-# 只取前 5 项，或输出 JSON 给脚本处理
-python -m autolab model-info --model reports/<run_id>/model.joblib --top 5
-python -m autolab model-info --model reports/<run_id>/model.joblib --json > model_info.json
+# 看全部特征名 / 只取前 5 项 / 输出 JSON 给脚本处理
+python -m autolab model-info --run-id <run_id> --features
+python -m autolab model-info --run-id <run_id> --top 5
+python -m autolab model-info --run-id <run_id> --json > model_info.json
 ```
 
 输出示例（UCI Adult 随机森林）：
