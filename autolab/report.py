@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import pathlib
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -151,6 +152,21 @@ def markdown_report(summary: dict) -> str:
     lines.append("```json")
     lines.append(json.dumps(summary.get("plan") or {}, ensure_ascii=False, indent=2))
     lines.append("```")
+    model_export = summary.get("model_export") or {}
+    if model_export.get("model_file"):
+        model_file = model_export["model_file"]
+        lines.append("")
+        lines.append(
+            f"- 训练后模型：`{model_file}`（joblib 格式；{model_export.get('model_kind')}，"
+            f"{model_export.get('serializer')} 序列化，CV 均值 {_fmt(model_export.get('cv_mean'))}）"
+        )
+        lines.append("- 加载与预测（与本报告同目录）：")
+        lines.append("")
+        lines.append("```python")
+        lines.append("import joblib")
+        lines.append('payload = joblib.load("' + str(model_file) + '")')
+        lines.append('pred = payload["model"].predict(payload["pipeline"].transform(X_new))')
+        lines.append("```")
     lines.append("")
 
     lines.append("## 四、数据画像摘要")
@@ -199,11 +215,34 @@ def markdown_report(summary: dict) -> str:
     return "\n".join(lines)
 
 
+def _final_model_source(summary: dict) -> tuple[pathlib.Path | None, dict]:
+    """找到最后一轮导出的模型文件（优先 summary 里已记录的路径）。"""
+    export = summary.get("model_export") or {}
+    if export.get("model_path"):
+        return pathlib.Path(str(export["model_path"])), export
+    rounds = summary.get("rounds") or []
+    artifacts = ((rounds[-1].get("result") if rounds else {}) or {}).get("artifacts") or {}
+    model = artifacts.get("model") or {}
+    if model.get("model_path"):
+        return pathlib.Path(str(model["model_path"])), model
+    return None, {}
+
+
 def export_bundle(summary: dict) -> dict:
     """把报告、方案、结果、画像、环境、trace 打包成可复现 zip。"""
     run_id = str(summary.get("run_id") or time.strftime("run_%Y%m%d_%H%M%S"))
     run_dir = config.REPORT_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+
+    model_src, model_meta = _final_model_source(summary)
+    if model_src is not None and model_src.exists():
+        model_file = run_dir / "model.joblib"
+        shutil.copyfile(model_src, model_file)
+        summary["model_export"] = {
+            **model_meta,
+            "model_path": str(model_file),
+            "model_file": model_file.name,
+        }
 
     report_text = markdown_report(summary)
     (run_dir / "report.md").write_text(report_text, encoding="utf-8")
@@ -224,6 +263,7 @@ def export_bundle(summary: dict) -> dict:
             "rounds_used": summary.get("rounds_used"),
             "profile_hash": summary.get("profile_hash"),
             "holdout": summary.get("holdout"),
+            "model": summary.get("model_export") or None,
             "created_at": time.time(),
         },
     )
@@ -256,5 +296,6 @@ def export_bundle(summary: dict) -> dict:
         "report_md": str(run_dir / "report.md"),
         "report_dir": str(run_dir),
         "bundle_path": str(bundle),
+        "model_path": (summary.get("model_export") or {}).get("model_path"),
         "env": summary.get("env") or {},
     }

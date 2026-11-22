@@ -28,6 +28,7 @@ AutoLab 让 Agent 像研究生一样做实验：给它一句话目标（例如"�
 | 受限动作空间 | 方案是一份 JSON，只允许白名单算子/模型；做 Schema 与白名单双重校验，非法方案回退模板方案 |
 | 安全沙箱 | 子进程隔离、超时即杀、socket 级禁网、不依赖 Docker |
 | 可复现交付 | 每次运行自动导出 trace、报告、配置、环境信息与一键复现脚本 zip |
+| 最终模型导出 | 运行结束把最终方案在训练池上重新拟合，导出 `reports/<run_id>/model.joblib`（预处理 Pipeline + 模型本体 + 元信息），随报告/复现包交付，面板可直接下载 |
 | 留出集复验 | 评测时可选先切出独立留出集（`holdout_ratio`，默认 0 不启用；真实任务 t1_adult 用 20%）：K 折划分与选模都不碰它，跑完最后复验一次并写进报告，抑制多轮重规划导致的验证集过拟合 |
 
 ## 快速开始（零额外依赖：只用 numpy + pandas）
@@ -78,7 +79,7 @@ python -m autolab serve --port 8000
 
 - 左侧选择任务，勾选「复用成功配方」后点「开始实验」，右侧实时显示指标、轮次与调用链轨迹（前端 1 秒轮询；SSE 接口 `/api/runs/{run_id}/stream` 已就绪，可后续接入）；
 - 指标区含「留出集复验」卡片：任务启用 `holdout_ratio` 时显示最终方案在留出集上的指标（不参与达标判定；未启用显示 —），轨迹与报告第五节同步给出；
-- 跑完出现报告 Markdown 链接；左侧「实验历史」可点开任意历史 run 回看完整 trace；
+- 跑完出现报告 Markdown 链接与「下载模型 ↓」链接（`GET /api/runs/{run_id}/model`，拿到 `model.joblib`）；左侧「实验历史」可点开任意历史 run 回看完整 trace；
 - 每条历史记录右侧有「删除」按钮：确认后删除该次运行的记录、轨迹、报告与复现包
   （配方库保留；运行中的实验需等结束后再删，避免 trace 写一半）；
 - 支持批量删除：勾选多条（或点「全选」）后点「删除所选（N）」，逐条尽量删，
@@ -97,6 +98,8 @@ python -m autolab serve --port 8000
   未安装时自动退回 numpy 线性模型，demo 与合成任务不受影响。
 - 大模型（可选）：`cp .env.example .env` 后填 `DEEPSEEK_API_KEY`。
   未配置 Key 时自动退化为 **模板规划器 + 规则归因**——这是现场断网/限流时的兜底路径，永远可用。
+- 最终模型导出：优先用 `joblib`（scikit-learn 自带）；未安装 joblib 时自动退回标准库
+  `pickle`，零依赖的 numpy demo 也能导出 `model.joblib`。
 
 ## 目录结构
 
@@ -120,7 +123,8 @@ python -m autolab serve --port 8000
 │   │   └── netguard.py       #   socket 级禁网
 │   ├── evaluation/           # 评测层
 │   │   ├── metrics.py        #   accuracy / f1_macro / rmse / mae
-│   │   └── protocol.py       #   固定种子 K 折交叉验证协议
+│   │   ├── model_store.py    #   最终模型导出/加载（joblib，缺 joblib 退 pickle）
+│   │   └── protocol.py       #   固定种子 K 折交叉验证协议（可选留出集）
 │   ├── tracing/              # 可观测层
 │   │   ├── logger.py         #   JSONL trace 写入 + 订阅（SSE 用）
 │   │   └── replay.py         #   trace 回放

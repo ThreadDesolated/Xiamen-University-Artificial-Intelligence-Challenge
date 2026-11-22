@@ -72,6 +72,8 @@ def print_summary(summary: dict) -> None:
         print(f"  报告: {summary.get('report_md')}")
     if summary.get("bundle_path"):
         print(f"  复现包: {summary.get('bundle_path')}")
+    if summary.get("model_path"):
+        print(f"  最终模型: {summary.get('model_path')}")
     print("")
 
 

@@ -6,3 +6,4 @@
 .pick{width:17px;height:17px;flex:0 0 auto;margin-top:12px;accent-color:#009ca6;cursor:pointer}
 #batchdel{font-size:13px;padding:5px 12px;white-space:nowrap}
 #batchdel:disabled{cursor:not-allowed}
+.links{display:flex;gap:16px;align-items:baseline}

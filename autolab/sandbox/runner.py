@@ -20,6 +20,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="AutoLab sandbox runner")
     parser.add_argument("--spec", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument(
+        "--model-out",
+        default="",
+        help="训练后模型导出路径（joblib）；留空则不导出模型",
+    )
     args = parser.parse_args()
 
     result: dict = {"status": "ok", "metrics": {}, "seconds": 0.0, "error": ""}
@@ -44,6 +49,8 @@ def main() -> int:
             seed=task.seed,
             features=task.features,
             holdout_ratio=task.holdout_ratio,
+            model_path=args.model_out or None,
+            task_id=task.task_id,
         )
         result.update(payload)
         result["status"] = "ok"

@@ -293,7 +293,11 @@ def run_agent(
         trace.emit(
             "export",
             tool="report.export_bundle",
-            output={"report_md": report_files.get("report_md"), "bundle_path": report_files.get("bundle_path")},
+            output={
+                "report_md": report_files.get("report_md"),
+                "bundle_path": report_files.get("bundle_path"),
+                "model_path": report_files.get("model_path"),
+            },
         )
         return summary
     except Exception as exc:  # noqa: BLE001 - 单次 run 失败不能拖垮 CLI/服务

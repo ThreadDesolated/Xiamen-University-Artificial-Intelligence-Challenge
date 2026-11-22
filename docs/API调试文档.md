@@ -42,6 +42,7 @@ python -m autolab serve --port 8000
 | DELETE | `/api/runs` | 批量删除历史记录（body: `run_ids`，逐条尽量删） |
 | GET | `/api/runs/{run_id}/trace?after=0` | 拉取 trace 事件（一次性） |
 | GET | `/api/runs/{run_id}/report` | 取 `report.md` 原文 |
+| GET | `/api/runs/{run_id}/model` | 下载本次运行导出的最终模型（`model.joblib`） |
 | GET | `/api/runs/{run_id}/stream` | **SSE 实时推流** |
 
 `run_id` 由服务端生成，形如 `run_20261106_205014_0a402b`。
@@ -139,6 +140,25 @@ curl.exe -sS -X DELETE "http://127.0.0.1:8000/api/runs" `
 - 逐条尽量删：运行中的 / 不存在的 / 非法 id 记入 `failed`，其余照常删除，整体返回 `200`（部分成功）；
 - 删除范围与单条删除一致（记录 + 归因 + 轨迹/报告/复现包），**配方库保留**；
 - 面板上的用法：每条历史前的勾选框逐个选择、点「全选」全选，再点「删除所选（N）」。
+
+### 3.7 下载最终模型
+
+```powershell
+curl.exe -sS -o model.joblib "http://127.0.0.1:8000/api/runs/run_20261106_205014_0a402b/model"
+```
+
+- 每次运行结束都会把**最终方案**在训练池上重新拟合，导出为 `reports/<run_id>/model.joblib`：
+  含预处理 Pipeline + 模型本体 + 元信息（任务、方案、CV 均值、类别映射等）；
+- 响应 `application/octet-stream`，附件名 `<run_id>-model.joblib`；文件不存在 `404`，非法 `run_id` `400`；
+- 加载方式：
+
+```python
+import joblib
+payload = joblib.load("model.joblib")
+pred = payload["model"].predict(payload["pipeline"].transform(X_new))  # 分类结果已映射回原始标签
+```
+
+- 面板上的用法：运行结束后「实验轨迹」右上角出现「下载模型 ↓」；历史记录点开同样可以下载。
 
 ---
 

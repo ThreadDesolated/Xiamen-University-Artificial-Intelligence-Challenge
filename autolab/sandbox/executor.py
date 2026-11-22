@@ -41,8 +41,11 @@ def execute_plan(
     workdir.mkdir(parents=True, exist_ok=True)
     spec_path = workdir / f"spec_r{round_idx}.json"
     out_path = workdir / f"result_r{round_idx}.json"
+    model_path = workdir / f"model_r{round_idx}.joblib"
     if out_path.exists():
         out_path.unlink()
+    if model_path.exists():
+        model_path.unlink()
 
     spec_path.write_text(
         json.dumps({"task": task.to_dict(), "plan": plan.to_dict()}, ensure_ascii=False, indent=2),
@@ -63,7 +66,17 @@ def execute_plan(
     for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
         env.pop(key, None)
 
-    cmd = [sys.executable, "-m", "autolab.sandbox.runner", "--spec", str(spec_path), "--out", str(out_path)]
+    cmd = [
+        sys.executable,
+        "-m",
+        "autolab.sandbox.runner",
+        "--spec",
+        str(spec_path),
+        "--out",
+        str(out_path),
+        "--model-out",
+        str(model_path),
+    ]
     timeout = _timeout_seconds(task)
     started = time.perf_counter()
     try:

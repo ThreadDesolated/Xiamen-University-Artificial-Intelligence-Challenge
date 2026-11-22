@@ -316,6 +316,20 @@ def create_app():
             raise HTTPException(status_code=404, detail="报告尚未生成")
         return PlainTextResponse(report.read_text(encoding="utf-8"), media_type="text/markdown")
 
+    @app.get("/api/runs/{run_id}/model")
+    def get_model(run_id: str):
+        """下载本次运行导出的最终模型（joblib：预处理 Pipeline + 模型本体 + 元信息）。"""
+        if not _RUN_ID_RE.match(run_id):
+            raise HTTPException(status_code=400, detail="非法的 run_id")
+        model_file = config.REPORT_DIR / run_id / "model.joblib"
+        if not model_file.exists():
+            raise HTTPException(status_code=404, detail="该运行没有导出模型")
+        return FileResponse(
+            model_file,
+            media_type="application/octet-stream",
+            filename=f"{run_id}-model.joblib",
+        )
+
     @app.get("/api/runs/{run_id}/stream")
     def stream_trace(run_id: str, request: Request, after: int = 0):
         """SSE：持续推送 trace 新事件，收到 done 事件后自动结束。

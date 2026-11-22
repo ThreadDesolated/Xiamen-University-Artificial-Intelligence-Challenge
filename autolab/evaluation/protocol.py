@@ -18,6 +18,7 @@ import pandas as pd
 from ..schemas import Metrics, ValidationError
 from ..sandbox.operators import Pipeline, build_model
 from .metrics import compute
+from .model_store import save_model
 
 
 def feature_columns(df: pd.DataFrame, target: str, features=None) -> list[str]:
@@ -102,11 +103,16 @@ def run_cv(
     seed: int = 42,
     features=None,
     holdout_ratio: float = 0.0,
+    model_path=None,
+    task_id: str | None = None,
 ) -> dict:
     """执行一次完整交叉验证，返回可直接 JSON 化的结果 dict。
 
     holdout_ratio > 0 时：先按比例切出留出集（分类分层），K 折只在剩余训练池上做；
     交叉验证结束后，用最终方案在训练池上重新拟合，并在留出集上评估一次。
+
+    model_path 不为空时：在训练池上拟合「预处理 Pipeline + 模型」，导出为单文件
+    （reports/<run_id>/model.joblib），并在结果 artifacts 里记录模型元信息。
     """
     started = time.perf_counter()
     X, y_raw = _prepare(df, target, features)
@@ -116,10 +122,13 @@ def run_cv(
         raise ValidationError("holdout_ratio 需在 [0, 0.5) 之间（0 表示不启用留出集）")
 
     if is_classification:
-        y = pd.factorize(pd.Series(y_raw), sort=True)[0].astype(np.int64)
+        y_codes, uniques = pd.factorize(pd.Series(y_raw), sort=True)
+        y = y_codes.astype(np.int64)
+        classes = uniques.tolist() if hasattr(uniques, "tolist") else list(uniques)
         holdout_idx = stratified_holdout_indices(y, ratio, seed) if ratio > 0 else np.array([], dtype=int)
     else:
         y = np.asarray(y_raw, dtype=float)
+        classes = None
         holdout_idx = holdout_indices(len(y), ratio, seed) if ratio > 0 else np.array([], dtype=int)
 
     if holdout_idx.size:
@@ -189,9 +198,11 @@ def run_cv(
         "holdout": None,
     }
 
+    final_pipe = None
+    final_model = None
     if X_holdout is not None and y_holdout is not None:
-        pipe, model, _, _ = _fit_final(X_cv, y_cv)
-        pred = model.predict(pipe.transform(X_holdout))
+        final_pipe, final_model, _, _ = _fit_final(X_cv, y_cv)
+        pred = final_model.predict(final_pipe.transform(X_holdout))
         result["holdout"] = {
             "metric": metric,
             "value": round(float(compute(metric, y_holdout, pred)), 6),
@@ -199,6 +210,25 @@ def run_cv(
             "n_train_samples": int(len(X_cv)),
             "ratio": round(float(len(y_holdout) / len(y)), 4),
             "split_seed": int(seed),
+        }
+        result["seconds"] = round(time.perf_counter() - started, 3)
+
+    if model_path:
+        if final_pipe is None:
+            final_pipe, final_model, _, _ = _fit_final(X_cv, y_cv)
+        result["artifacts"] = {
+            "model": save_model(
+                model_path,
+                final_pipe,
+                final_model,
+                plan=plan,
+                task_id=task_id,
+                task_type=task_type,
+                target=target,
+                metric=metric,
+                classes=classes,
+                cv_mean=float(values.mean()),
+            )
         }
         result["seconds"] = round(time.perf_counter() - started, 3)
     return result
