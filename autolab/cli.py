@@ -4,6 +4,7 @@
   python -m autolab demo                      # 离线演示（无需 API Key）
   python -m autolab run --task t1_demo        # 跑任务；加 --llm 启用大模型规划
   python -m autolab run --task t1_demo --plan reports/<run>/plan.json   # 按方案原样复现
+  python -m autolab run --plan latest                     # 用最近一次实验保存的方案复现
   python -m autolab prepare --task t1_adult   # 下载并准备真实数据集
   python -m autolab replay --run-id <run_id>  # 回放一次运行的调用链
   python -m autolab predict --model reports/<run_id>/model.joblib --csv data.csv  # 用导出的最终模型预测
@@ -98,17 +99,71 @@ def _cmd_demo(args) -> int:
     return 0 if summary.get("status") in ("passed", "failed") else 1
 
 
+def _latest_plan() -> tuple[str | None, pathlib.Path | None]:
+    """找最近一次实验保存的方案，返回 (task_id, plan 路径)；没有则 (None, None)。
+
+    用于 `run --plan latest`：仓库里不一定带 reports/acceptance_1（那是交付包证据），
+    复现验收脚本可以用最近一次真实运行的方案复现，而不是直接报错。
+    """
+    reports = config.REPORT_DIR
+    if not reports.is_dir():
+        return None, None
+    candidates = sorted(
+        reports.glob("*/plan.json"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
+    if not candidates:
+        return None, None
+    plan_path = candidates[0]
+    task_id: str | None = None
+    manifest = plan_path.parent / "manifest.json"
+    if manifest.is_file():
+        try:
+            task_id = json.loads(manifest.read_text(encoding="utf-8")).get("task_id")
+        except (OSError, json.JSONDecodeError):
+            task_id = None
+    return task_id, plan_path
+
+
 def _cmd_run(args) -> int:
     from .agent.graph import run_agent
 
-    task = _load_task(args.task)
     fixed_plan = None
+    plan_task_id: str | None = None
     if args.plan:
-        path = pathlib.Path(args.plan)
-        if not path.is_absolute():
-            path = config.ROOT / path
-        fixed_plan = ExperimentPlan.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        spec = str(args.plan)
+        if spec.lower() in ("latest", "auto"):
+            plan_task_id, path = _latest_plan()
+            if path is None:
+                print("没有找到任何已保存的实验方案，无法自动复现。", file=sys.stderr)
+                print("可以先运行内置演示: python -m autolab demo", file=sys.stderr)
+                return 2
+        else:
+            path = pathlib.Path(spec)
+            if not path.is_absolute():
+                path = config.ROOT / path
+        if not path.is_file():
+            print(f"找不到实验方案文件: {path}", file=sys.stderr)
+            print(
+                "提示：reports/acceptance_1/plan.json 这类验收证据只在交付包里；"
+                "在仓库里可用 python -m autolab run --plan latest 取最近一次实验方案。",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            fixed_plan = ExperimentPlan.from_dict(payload)
+        except (OSError, ValueError) as exc:
+            print(f"实验方案文件无法解析: {path}（{exc}）", file=sys.stderr)
+            return 2
         print(f"按已保存方案复现: {path}")
+
+    if args.task:
+        task = _load_task(args.task)
+    elif plan_task_id:
+        task = _load_task(plan_task_id)
+    else:
+        print("需要 --task 或 --plan latest 参数", file=sys.stderr)
+        return 2
     summary = run_agent(
         task,
         use_llm=bool(args.llm),
@@ -524,7 +579,8 @@ def build_parser() -> argparse.ArgumentParser:
     demo.set_defaults(func=_cmd_demo)
 
     run = sub.add_parser("run", help="按任务配置运行一次 Agent 闭环")
-    run.add_argument("--task", required=True, help="任务 id（configs/tasks/*.json）或配置文件路径")
+    run.add_argument("--task", default=None,
+                     help="任务 id（configs/tasks/*.json）或配置文件路径；--plan latest 时可省略")
     run.add_argument("--max-rounds", type=int, default=None)
     run.add_argument("--llm", action="store_true", help="启用大模型规划（需 DEEPSEEK_API_KEY）")
     run.add_argument("--no-recipe", action="store_true", help="跳过配方库检索")

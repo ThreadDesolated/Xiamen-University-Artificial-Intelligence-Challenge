@@ -59,8 +59,12 @@ python -m autolab serve --port 8000              # 启动 Web 面板 + API（见
 python -m autolab replay --run-id <run_id>       # 回放一次运行（演示断网兜底用）
 python -m autolab predict --model reports/<run_id>/model.joblib --csv data.csv   # 用导出的最终模型预测
 python -m autolab model-info --run-id <run_id>                   # 按 run_id 查看模型全貌（超参/特征/重要性）
+python -m autolab run --plan latest              # 用最近一次实验保存的方案原样复现（不用手找 plan.json）
 python -m unittest discover -s tests -v          # 跑测试
 ```
+
+`复现验收.cmd` 优先按交付包里的 `reports/acceptance_1/plan.json` 原样复现；仓库工作树里没有这份验收证据时，
+会自动回退成 `--plan latest`（取最近一次实验的方案），不再报 Traceback。
 
 `t1_adult` 是真实数据任务（1000 行 Adult 子集，正负比 750/250）：线性模型上限约 0.845，达不到 0.85 阈值，
 归因会在第 2 轮把模型升级为随机森林，实测 0.5230 → 0.8560，两轮达标（需 `pip install -r requirements.txt`，
