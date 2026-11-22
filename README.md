@@ -58,6 +58,7 @@ python -m autolab run --task configs/tasks/t1_adult.json
 python -m autolab serve --port 8000              # 启动 Web 面板 + API（见下节）
 python -m autolab replay --run-id <run_id>       # 回放一次运行（演示断网兜底用）
 python -m autolab predict --model reports/<run_id>/model.joblib --csv data.csv   # 用导出的最终模型预测
+python -m autolab model-info --model reports/<run_id>/model.joblib               # 查看模型全貌（超参/特征/重要性）
 python -m unittest discover -s tests -v          # 跑测试
 ```
 
@@ -80,6 +81,44 @@ python -m autolab predict --model reports/<run_id>/model.joblib --csv new_data.c
 - 默认按模型元信息里的 `target` 列名从 CSV 中剔除标签列；数据是纯特征（没有标签）也能直接预测；
 - `--proba`：分类任务额外输出正类概率列；`--target` 可手动指定目标列名；
 - `--out`：结果写 CSV（`row,prediction[,probability]`）；不加 `--out` 只打印前 10 行和预测分布（分类）或统计（回归）。
+
+## 查看导出的模型（CLI）
+
+`model.joblib` 是二进制文件，用 `model-info` 一次看全：元信息、实验方案、预处理参数、特征名单、训练结果（树的数量/节点数/重要性或权重摘要）：
+
+```bash
+# 默认打印前 15 项重要性/权重
+python -m autolab model-info --model reports/<run_id>/model.joblib
+
+# 看全部特征名 + 全部预处理参数
+python -m autolab model-info --model reports/<run_id>/model.joblib --features
+
+# 只取前 5 项，或输出 JSON 给脚本处理
+python -m autolab model-info --model reports/<run_id>/model.joblib --top 5
+python -m autolab model-info --model reports/<run_id>/model.joblib --json > model_info.json
+```
+
+输出示例（UCI Adult 随机森林）：
+
+```
+文件大小: 550.8 KB  格式: autolab.model.v1  序列化: joblib
+任务: t1_adult（binary_classification）  目标列: income  指标: accuracy
+模型: random_forest  超参数: {"n_estimators": 300, "max_depth": 8, "min_samples_leaf": 1}
+CV 均值: 0.85375  类别: [0, 1]  sklearn: 1.9.1
+...
+训练结果
+  内部实现: sklearn RandomForestClassifier  实际树数: 300  总节点数: 29620  平均节点/树: 98.7  最大树深: 8
+  特征数: 82  类别数: 2
+  特征重要性 Top 8:
+       education_num: 0.1162
+       capital_gain: 0.1153
+       marital_status=Married-civ-spouse: 0.0939
+       ...
+```
+
+- 超参数与"模型是什么方案训练出来的"在 `meta` / `meta.plan` 里；预处理参数（onehot 类别表、标准化均值/方差、填充值）在 `pipeline.state` 里；
+- 训练后参数：随机森林的 `feature_importances_`、`estimators_`（每棵树），numpy 线性模型的 `W_` / `w_` 都会汇总展示；
+- `--json` 输出结构化摘要（`meta` / `plan` / `pipeline` / `model.trained`），便于二次处理。
 
 ## Web 面板（调用链可视化）
 
@@ -122,7 +161,7 @@ python -m autolab serve --port 8000
 │   ├── schemas.py            # 任务 / 画像 / 方案 / 结果 / trace 数据结构（与 docs/接口契约.md 一一对应）
 │   ├── profile.py            # 数据画像
 │   ├── config.py             # 路径与运行配置
-│   ├── cli.py                # 命令行入口（demo / run / prepare / serve / replay）
+│   ├── cli.py                # 命令行入口（demo / run / prepare / predict / model-info / serve / replay）
 │   ├── agent/                # 编排层
 │   │   ├── graph.py          #   闭环主链路：profile → plan → execute → evaluate → decide → attribute → replan
 │   │   ├── planner.py        #   模板规划器（离线保底） + LLM 规划器（JSON 约束）

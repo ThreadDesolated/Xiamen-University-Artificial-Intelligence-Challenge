@@ -7,6 +7,7 @@
   python -m autolab prepare --task t1_adult   # 下载并准备真实数据集
   python -m autolab replay --run-id <run_id>  # 回放一次运行的调用链
   python -m autolab predict --model reports/<run_id>/model.joblib --csv data.csv  # 用导出的最终模型预测
+  python -m autolab model-info --model reports/<run_id>/model.joblib  # 查看模型全貌（超参/特征/重要性）
   python -m autolab serve                     # 启动 trace 面板后端（需 Web 依赖）
   python -m autolab init-db                   # 初始化 SQLite
   python -m autolab list                      # 查看历史运行
@@ -230,6 +231,230 @@ def _cmd_predict(args) -> int:
     return 0
 
 
+def _brief(values, limit: int = 6) -> str:
+    """把一组数值压成一行摘要。"""
+    items = list(values)
+    shown = ", ".join(f"{float(v):.4g}" for v in items[:limit])
+    if len(items) > limit:
+        shown += f", …（共 {len(items)}）"
+    return shown
+
+
+def _cmd_model_info(args) -> int:
+    """打印导出的模型文件全貌：元信息、实验方案、预处理参数、特征名单、训练结果。"""
+    import numpy as np
+
+    from .evaluation.model_store import load_model
+
+    model_path = pathlib.Path(args.model)
+    if not model_path.is_file():
+        print(f"模型文件不存在: {model_path}", file=sys.stderr)
+        return 2
+    try:
+        payload = load_model(model_path)
+    except Exception as exc:  # noqa: BLE001 - 统一转成可读错误
+        print(f"无法加载模型（不是 AutoLab 导出的文件？）: {exc}", file=sys.stderr)
+        return 2
+
+    meta = payload.get("meta") or {}
+    plan = meta.get("plan") or {}
+    pipeline = payload.get("pipeline")
+    model_obj = payload.get("model")
+    cols = [str(c) for c in (getattr(pipeline, "_fitted_cols", None) or [])]
+    state = dict(getattr(pipeline, "state", None) or {})
+
+    # ---- 预处理管线（按 plan.ops 顺序，附拟合参数）----
+    steps = []
+    for idx, op_spec in enumerate(plan.get("ops") or []):
+        op = str(op_spec.get("op"))
+        params = op_spec.get("params") or {}
+        value = state.get(f"{idx}:{op}")
+        detail = {"index": idx, "op": op, "params": params}
+        if op == "onehot" and isinstance(value, dict):
+            detail["columns"] = {
+                str(col): {"n": len(cats), "categories": [str(c) for c in cats]}
+                for col, cats in value.items()
+            }
+        elif op in ("impute_mean", "impute_median") and value is not None:
+            detail["values"] = {str(k): float(v) for k, v in dict(value).items()}
+        elif op == "scale_standard" and isinstance(value, tuple) and len(value) == 2:
+            means, stds = value
+            detail["mean"] = {str(k): float(v) for k, v in dict(means).items()}
+            detail["std"] = {str(k): float(v) for k, v in dict(stds).items()}
+        elif op == "variance_filter" and value:
+            detail["kept_columns"] = [str(c) for c in value]
+        elif value is not None:
+            detail["fitted"] = type(value).__name__
+        steps.append(detail)
+
+    # ---- 训练结果摘要 ----
+    kind = meta.get("model_kind") or (plan.get("model") or {}).get("kind") or type(model_obj).__name__
+    model_params = meta.get("model_params") or (plan.get("model") or {}).get("params") or {}
+    trained: dict = {"kind": kind}
+    if kind == "random_forest":
+        inner = getattr(model_obj, "model_", None)
+        raw_trees = getattr(inner, "estimators_", None)
+        trees = list(raw_trees) if raw_trees is not None else []
+        node_counts = [int(t.tree_.node_count) for t in trees]
+        depths = [int(t.tree_.max_depth) for t in trees]
+        raw_importances = getattr(inner, "feature_importances_", None)
+        importances = list(np.asarray(raw_importances, dtype=float)) if raw_importances is not None else []
+        pairs = []
+        for i, value in enumerate(importances):
+            name = cols[i] if i < len(cols) else f"feature_{i}"
+            pairs.append([name, float(value)])
+        pairs.sort(key=lambda item: -item[1])
+        trained.update(
+            {
+                "inner": type(inner).__name__,
+                "n_estimators": len(trees),
+                "n_nodes": sum(node_counts),
+                "avg_nodes": round(sum(node_counts) / len(node_counts), 1) if node_counts else None,
+                "max_depth": max(depths) if depths else None,
+                "n_features": int(getattr(inner, "n_features_in_", len(importances)) or len(importances)),
+                "n_classes": int(getattr(inner, "n_classes_", 0) or 0),
+                "top_importances": pairs[: max(1, args.top)],
+            }
+        )
+    elif kind == "logistic_gd":
+        weights = np.asarray(getattr(model_obj, "W_", np.empty((0, 0))), dtype=float)
+        real = weights[:-1] if weights.ndim == 2 and weights.shape[0] else weights
+        if real.ndim == 2:
+            strength = np.abs(real).sum(axis=1)
+        else:
+            strength = np.abs(real)
+        pairs = sorted(
+            ([[cols[i] if i < len(cols) else f"feature_{i}", float(v)] for i, v in enumerate(strength)]),
+            key=lambda item: -item[1],
+        )
+        trained.update(
+            {
+                "n_weights": int(strength.size),
+                "n_classes": int(weights.shape[1]) if weights.ndim == 2 else None,
+                "top_weights": pairs[: max(1, args.top)],
+            }
+        )
+    elif kind == "linear_gd":
+        weights = np.asarray(getattr(model_obj, "w_", np.empty(0)), dtype=float)
+        real = weights[:-1] if weights.size else weights
+        pairs = sorted(
+            ([[cols[i] if i < len(cols) else f"feature_{i}", float(v)] for i, v in enumerate(np.abs(real))]),
+            key=lambda item: -item[1],
+        )
+        trained.update({"n_weights": int(real.size), "top_weights": pairs[: max(1, args.top)]})
+    elif kind == "nearest_centroid":
+        centroids = np.asarray(getattr(model_obj, "centroids_", np.empty((0, 0))), dtype=float)
+        trained.update(
+            {
+                "n_centroids": int(centroids.shape[0]) if centroids.ndim == 2 else 0,
+                "n_features": int(centroids.shape[1]) if centroids.ndim == 2 else 0,
+                "classes": [str(c) for c in np.asarray(getattr(model_obj, "classes_", []))],
+            }
+        )
+    else:
+        trained["attributes"] = sorted(vars(model_obj).keys())
+
+    summary = {
+        "file": str(model_path),
+        "size_bytes": model_path.stat().st_size,
+        "meta": meta,
+        "plan": plan,
+        "pipeline": {"steps": steps, "n_features": len(cols), "features": cols},
+        "model": {"kind": kind, "params": model_params, "trained": trained},
+    }
+
+    if args.json:
+        print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
+        return 0
+
+    print("=" * 72)
+    print(f"AutoLab model-info: {model_path}")
+    print("=" * 72)
+    print(f"  文件大小: {model_path.stat().st_size / 1024:.1f} KB"
+          f"  格式: {meta.get('format')}  序列化: {meta.get('serializer')}")
+    created_at = meta.get("created_at")
+    if created_at:
+        try:
+            from datetime import datetime
+
+            print(f"  导出时间: {datetime.fromtimestamp(float(created_at)).strftime('%Y-%m-%d %H:%M:%S')}")
+        except (TypeError, ValueError, OSError):
+            pass
+    print(f"  任务: {meta.get('task_id')}（{meta.get('task_type')}）"
+          f"  目标列: {meta.get('target')}  指标: {meta.get('metric')}")
+    print(f"  模型: {kind}  超参数: {json.dumps(model_params, ensure_ascii=False)}")
+    print(f"  CV 均值: {meta.get('cv_mean')}  类别: {meta.get('classes')}"
+          f"  sklearn: {meta.get('sklearn_version')}")
+
+    print("-" * 72)
+    print("实验方案")
+    print(json.dumps(plan, ensure_ascii=False, indent=2))
+
+    print("-" * 72)
+    print(f"预处理管线（特征列 {len(cols)} 个）")
+    for step in steps:
+        op = step["op"]
+        params = json.dumps(step["params"], ensure_ascii=False) if step["params"] else ""
+        print(f"  {step['index'] + 1}) {op} {params}".rstrip())
+        if "columns" in step:
+            for col, info in step["columns"].items():
+                preview = ", ".join(info["categories"][:6])
+                if info["n"] > 6:
+                    preview += f", …（共 {info['n']} 类）"
+                print(f"       {col}: {preview}")
+        elif "values" in step:
+            shown = 0
+            for col, value in step["values"].items():
+                if not args.features and shown >= args.top:
+                    print(f"       …（共 {len(step['values'])} 列，--features 显示全部）")
+                    break
+                print(f"       {col}: {value:.4g}")
+                shown += 1
+        elif "mean" in step:
+            shown = 0
+            for col, value in step["mean"].items():
+                if not args.features and shown >= args.top:
+                    print(f"       …（共 {len(step['mean'])} 列，--features 显示全部）")
+                    break
+                std = step["std"].get(col)
+                suffix = f"（std={std:.4g}）" if std is not None else ""
+                print(f"       {col}: mean={value:.4g}{suffix}")
+                shown += 1
+        elif "kept_columns" in step:
+            print(f"       保留 {len(step['kept_columns'])} 列: {', '.join(step['kept_columns'][:8])}")
+    if cols:
+        if args.features:
+            print("  特征名单:")
+            for name in cols:
+                print(f"       {name}")
+        else:
+            print(f"  特征名单（前 10 个，--features 查看全部）: {', '.join(cols[:10])} …")
+
+    print("-" * 72)
+    print("训练结果")
+    if kind == "random_forest":
+        print(f"  内部实现: sklearn {trained['inner']}"
+              f"  实际树数: {trained['n_estimators']}  总节点数: {trained['n_nodes']}"
+              f"  平均节点/树: {trained['avg_nodes']}  最大树深: {trained['max_depth']}")
+        print(f"  特征数: {trained['n_features']}  类别数: {trained['n_classes']}")
+        print(f"  特征重要性 Top {len(trained['top_importances'])}:")
+        for name, value in trained["top_importances"]:
+            print(f"       {name}: {value:.4f}")
+    elif kind in ("logistic_gd", "linear_gd"):
+        label = "权重" if kind == "logistic_gd" else "回归系数"
+        print(f"  {label} 维度: {trained['n_weights']}")
+        print(f"  |{label}| Top {len(trained['top_weights'])}:")
+        for name, value in trained["top_weights"]:
+            print(f"       {name}: {value:.4f}")
+    elif kind == "nearest_centroid":
+        print(f"  质心数: {trained['n_centroids']}  特征数: {trained['n_features']}"
+              f"  类别: {trained['classes']}")
+    else:
+        print(f"  属性: {', '.join(trained['attributes'])}")
+    print("")
+    return 0
+
+
 def _cmd_serve(args) -> int:
     try:
         import uvicorn
@@ -304,6 +529,13 @@ def build_parser() -> argparse.ArgumentParser:
     predict_p.add_argument("--out", default=None, help="预测结果输出 CSV 路径")
     predict_p.add_argument("--proba", action="store_true", help="分类任务同时输出正类概率")
     predict_p.set_defaults(func=_cmd_predict)
+
+    model_info = sub.add_parser("model-info", help="查看导出的模型文件：超参数、预处理参数、特征名单、重要性/权重")
+    model_info.add_argument("--model", required=True, help="模型文件（reports/<run_id>/model.joblib 或面板下载的）")
+    model_info.add_argument("--top", type=int, default=15, help="重要性/权重显示前 N 项（默认 15）")
+    model_info.add_argument("--features", action="store_true", help="打印全部特征名")
+    model_info.add_argument("--json", action="store_true", help="以 JSON 输出完整信息（便于脚本处理）")
+    model_info.set_defaults(func=_cmd_model_info)
 
     serve = sub.add_parser("serve", help="启动 trace 面板后端（FastAPI + SSE）")
     serve.add_argument("--host", default="127.0.0.1")
