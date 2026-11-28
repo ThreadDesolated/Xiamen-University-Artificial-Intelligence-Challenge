@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import copy
 import dataclasses
 import hashlib
 import json
@@ -61,13 +62,20 @@ class TaskSpec(_JsonMixin):
     notes: str = ""
 
     def validate(self) -> "TaskSpec":
-        from .config import SUPPORTED_METRICS, SUPPORTED_TASK_TYPES
+        from .config import LOWER_IS_BETTER_METRICS, SUPPORTED_METRICS, SUPPORTED_TASK_TYPES
 
         if self.task_type not in SUPPORTED_TASK_TYPES:
             raise ValidationError(f"不支持的 task_type: {self.task_type}")
         allowed = SUPPORTED_METRICS[self.task_type]
         if self.metric not in allowed:
             raise ValidationError(f"{self.task_type} 只支持指标 {allowed}，收到 {self.metric}")
+        expected_higher = self.metric not in LOWER_IS_BETTER_METRICS
+        if bool(self.higher_is_better) != expected_higher:
+            direction = "越高越好" if expected_higher else "越低越好"
+            raise ValidationError(
+                f"指标 {self.metric} 应{direction}，但 higher_is_better={self.higher_is_better}；"
+                "阈值口径与指标方向不一致"
+            )
         if self.n_splits < 2:
             raise ValidationError("n_splits 至少为 2")
         if self.budget_seconds <= 0 or self.max_rounds <= 0:
@@ -112,11 +120,13 @@ class ExperimentPlan(_JsonMixin):
         return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
 
     def copy_with_id(self, source: str) -> "ExperimentPlan":
+        # 必须深拷贝：归因会在副本上打补丁（params/ops），浅拷贝会把失败的修复
+        # 写回当前合法方案，导致下一轮方案校验失败、整个实验被打回模板。
         return ExperimentPlan(
             plan_id=new_id("plan"),
-            ops=[dict(o) for o in self.ops],
-            model=dict(self.model),
-            eval=dict(self.eval),
+            ops=copy.deepcopy(self.ops),
+            model=copy.deepcopy(self.model),
+            eval=copy.deepcopy(self.eval),
             source=source,
             notes=self.notes,
         )

@@ -83,6 +83,19 @@ def markdown_report(summary: dict) -> str:
         f"- 轮次：{summary.get('rounds_used')} / {summary.get('max_rounds')}，"
         f"规划来源：{summary.get('planner_source')}，配方命中：{summary.get('recipe_hit')}"
     )
+    goal = summary.get("goal") or {}
+    if goal.get("text"):
+        applied = goal.get("applied") or {}
+        detail = "，".join(f"{key}={value}" for key, value in applied.items()) or "未识别到数值约束"
+        lines.append(f"- 自然语言目标：{goal.get('text')}（解析结果：{detail}）")
+    transfer = summary.get("transfer") or {}
+    if transfer:
+        source = transfer.get("source_task_id") or transfer.get("source_recipe_id")
+        lines.append(
+            f"- 跨任务迁移：复用 `{source}` 的成功方案（画像相似度 "
+            f"{_fmt(transfer.get('similarity'), 2)}，来源指标 {transfer.get('metric_name')}="
+            f"{_fmt(transfer.get('metric_value'))}）"
+        )
     holdout = summary.get("holdout") or {}
     if holdout.get("value") is not None:
         lines.append(
@@ -262,6 +275,8 @@ def export_bundle(summary: dict) -> dict:
             "final_metric": summary.get("final_metric"),
             "rounds_used": summary.get("rounds_used"),
             "profile_hash": summary.get("profile_hash"),
+            "goal": summary.get("goal") or None,
+            "transfer": summary.get("transfer") or None,
             "holdout": summary.get("holdout"),
             "model": summary.get("model_export") or None,
             "created_at": time.time(),

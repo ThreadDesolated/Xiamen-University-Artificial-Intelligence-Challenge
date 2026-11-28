@@ -207,7 +207,12 @@ class LogisticGD:
 
 
 class LinearGD:
-    """numpy 实现的线性回归（梯度下降 + L2）。"""
+    """numpy 实现的线性回归（梯度下降 + L2）。
+
+    训练前在模型内部做一次标准化：回归任务常见"温度/湿度/滞后值"量纲差几十倍，
+    若只依赖方案里的 scale_standard，漏加时梯度会直接发散成 NaN/Inf，
+    表现为"实验看起来没有执行"。内部标准化不改变线性模型的表达能力。
+    """
 
     def __init__(self, params: dict | None = None):
         p = params or {}
@@ -215,12 +220,21 @@ class LinearGD:
         self.epochs = int(p.get("epochs", 300))
         self.l2 = float(p.get("l2", 0.001))
         self.w_: np.ndarray = np.empty(0)
+        self.mean_: np.ndarray = np.empty(0)
+        self.std_: np.ndarray = np.empty(0)
+
+    def _standardize(self, X: np.ndarray) -> np.ndarray:
+        return (X - self.mean_) / self.std_
 
     def fit(self, X, y) -> "LinearGD":
         X = np.asarray(X, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
         n = len(X)
-        Xb = np.hstack([X, np.ones((n, 1))])
+        self.mean_ = X.mean(axis=0)
+        std = X.std(axis=0)
+        self.std_ = np.where(std > 0, std, 1.0)
+        Xs = self._standardize(X)
+        Xb = np.hstack([Xs, np.ones((n, 1))])
         self.w_ = np.zeros(Xb.shape[1])
         for _ in range(self.epochs):
             grad = Xb.T @ (Xb @ self.w_ - y) / n
@@ -230,7 +244,7 @@ class LinearGD:
 
     def predict(self, X) -> np.ndarray:
         X = np.asarray(X, dtype=np.float64)
-        Xb = np.hstack([X, np.ones((len(X), 1))])
+        Xb = np.hstack([self._standardize(X), np.ones((len(X), 1))])
         return Xb @ self.w_
 
 

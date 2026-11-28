@@ -24,7 +24,8 @@ AutoLab 让 Agent 像研究生一样做实验：给它一句话目标（例如"�
 |---|---|
 | 指标即奖励的闭环 | 用真实评测指标（K 折交叉验证均值±标准差）作为奖励信号；达标/继续迭代由代码规则与预算决定，而不是模型"自称完成" |
 | 失败归因驱动重规划 | 把"实验失败"当一等公民：输出结构化失败原因和修复动作，再生成下一轮方案；线性模型触顶时自动升级到随机森林 |
-| 跨任务配方迁移 | 成功方案以"任务画像 + 方案 JSON"沉淀到 SQLite 配方库，新任务先检索复用 |
+| 跨任务配方迁移 | 成功方案以"任务画像 + 方案 JSON"沉淀到 SQLite 配方库；同画像指纹优先精确复用，指纹不同时按画像结构相似度（≥0.6）迁移，trace 与报告记录来源任务与相似度 |
+| 一句话目标 | 面板/CLI 输入"准确率 0.86 以上，预算 90 秒，最多 2 轮"，由确定性正则解析成阈值/预算/轮次，写进 trace 的 `goal` 事件；不依赖大模型，离线可用 |
 | 受限动作空间 | 方案是一份 JSON，只允许白名单算子/模型；做 Schema 与白名单双重校验，非法方案回退模板方案 |
 | 安全沙箱 | 子进程隔离、超时即杀、socket 级禁网、不依赖 Docker |
 | 可复现交付 | 每次运行自动导出 trace、报告、配置、环境信息与一键复现脚本 zip |
@@ -55,6 +56,7 @@ report: reports/<run_id>.zip
 ```bash
 python -m autolab prepare --task t1_adult        # 下载并准备固定子集（UCI Adult 1k 行）
 python -m autolab run --task configs/tasks/t1_adult.json
+python -m autolab run --task t1_shift --goal "准确率 0.86 以上，预算 90 秒，最多 2 轮"   # 一句话目标
 python -m autolab serve --port 8000              # 启动 Web 面板 + API（见下节）
 python -m autolab replay --run-id <run_id>       # 回放一次运行（演示断网兜底用）
 python -m autolab predict --model reports/<run_id>/model.joblib --csv data.csv   # 用导出的最终模型预测
@@ -73,6 +75,10 @@ python -m unittest discover -s tests -v          # 跑测试
 该任务的配置启用了留出集复验（`holdout_ratio: 0.2`）：1000 行中先切 200 行留出集，K 折只在其余 800 行上做，
 达标判定仍看 CV 均值；跑完再在留出集上评估一次（实测 CV 0.8538、留出集 0.8350），
 报告与 CLI 都会打印这个"对外泛化"成绩，避免多轮重规划把验证集调过头。`t1_demo` 保持 `holdout_ratio: 0`。
+
+跨任务迁移可直接验证：先 `python -m autolab demo`（或面板跑一次 t1_demo）沉淀配方，再跑
+`python -m autolab run --task t1_shift`。两个合成任务同类型、画像相近但指纹不同（实测相似度 0.8947），
+t1_shift 会命中迁移、首轮达标；面板与 trace 会显示"跨任务迁移 · t1_demo · 相似度 0.89"。
 
 ## 用导出的最终模型预测（CLI）
 
@@ -136,7 +142,9 @@ python -m autolab serve --port 8000
 
 浏览器打开 http://127.0.0.1:8000/ ：
 
-- 左侧选择任务，勾选「复用成功配方」后点「开始实验」，右侧实时显示指标、轮次与调用链轨迹（前端 1 秒轮询；SSE 接口 `/api/runs/{run_id}/stream` 已就绪，可后续接入）；
+- 左侧选择任务，可填一句话目标（如"准确率 0.86 以上，预算 90 秒"），右侧会自动预览方案草案与规划理由；
+  点「开始实验」后指标、轮次与调用链轨迹通过 SSE 实时推送（断线自动回退为轮询），下方同步画出指标曲线；
+- 方案卡展示算子/模型来源；命中同任务配方显示「复用同任务配方」，跨任务迁移显示「已迁移 · 来源任务 · 相似度」；
 - 指标区含「留出集复验」卡片：任务启用 `holdout_ratio` 时显示最终方案在留出集上的指标（不参与达标判定；未启用显示 —），轨迹与报告第五节同步给出；
 - 跑完出现报告 Markdown 链接与「下载模型 ↓」链接（`GET /api/runs/{run_id}/model`，拿到 `model.joblib`）；左侧「实验历史」可点开任意历史 run 回看完整 trace；
 - 每条历史记录右侧有「删除」按钮：确认后删除该次运行的记录、轨迹、报告与复现包
@@ -166,7 +174,9 @@ python -m autolab serve --port 8000
 .
 ├── autolab/
 │   ├── schemas.py            # 任务 / 画像 / 方案 / 结果 / trace 数据结构（与 docs/接口契约.md 一一对应）
-│   ├── profile.py            # 数据画像
+│   ├── profile.py            # 数据画像 + 画像相似度（跨任务迁移用）
+│   ├── transfer.py           # 跨任务配方迁移检索
+│   ├── goal.py               # 一句话目标解析（阈值/预算/轮次）
 │   ├── config.py             # 路径与运行配置
 │   ├── cli.py                # 命令行入口（demo / run / prepare / predict / model-info / serve / replay）
 │   ├── agent/                # 编排层

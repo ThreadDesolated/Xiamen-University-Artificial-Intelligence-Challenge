@@ -73,6 +73,52 @@ class RandomForestWhitelistTest(unittest.TestCase):
         self.assertTrue(any("max_depth" in err for err in errors), errors)
 
 
+class MetricAwareAttributionTest(unittest.TestCase):
+    """accuracy 不默认加 balanced；只有 f1_macro 才加，已带 balanced 的 accuracy 方案应建议移除。"""
+
+    def _plan(self, **params) -> ExperimentPlan:
+        model_params = {"lr": 0.1, "epochs": 400, "l2": 0.001}
+        model_params.update(params)
+        return ExperimentPlan(
+            ops=[{"op": "onehot", "params": {"max_categories": 20}}],
+            model={"kind": "logistic_gd", "params": model_params},
+            eval={"n_splits": 5, "seed": 42},
+        )
+
+    def _profile(self) -> dict:
+        profile = _adult_profile()
+        profile.setdefault("target", {})["imbalance_ratio"] = 3.0
+        return profile
+
+    def test_accuracy_does_not_add_balanced(self) -> None:
+        task = _adult_task()
+        causes = attribute(self._profile(), self._plan(), _FakeResult(0.80, 0.82), task)
+        ids = {cause.cause for cause in causes}
+        self.assertNotIn("class_imbalance", ids)
+        self.assertNotIn("metric_weight_mismatch", ids)
+        merged = replan(self._plan(), causes, task)
+        self.assertNotEqual(merged.model["params"].get("class_weight"), "balanced")
+        self.assertEqual(validate_plan(merged, task), [])
+
+    def test_accuracy_removes_existing_balanced(self) -> None:
+        task = _adult_task()
+        plan = self._plan(class_weight="balanced")
+        causes = attribute(self._profile(), plan, _FakeResult(0.80, 0.82), task)
+        self.assertIn("metric_weight_mismatch", {cause.cause for cause in causes})
+        merged = replan(plan, causes, task)
+        self.assertEqual(merged.model["params"].get("class_weight"), "none")
+        self.assertEqual(validate_plan(merged, task), [])
+
+    def test_f1_macro_still_uses_balanced(self) -> None:
+        raw = config.load_task_config("t1_adult")
+        raw["metric"] = "f1_macro"
+        task = TaskSpec.from_dict(raw).validate()
+        causes = attribute(self._profile(), self._plan(), _FakeResult(0.80, 0.82), task)
+        self.assertIn("class_imbalance", {cause.cause for cause in causes})
+        merged = replan(self._plan(), causes, task)
+        self.assertEqual(merged.model["params"].get("class_weight"), "balanced")
+
+
 class ZeroDependencyFallbackTest(unittest.TestCase):
     def test_underfit_falls_back_to_linear_without_sklearn(self) -> None:
         task = _adult_task()

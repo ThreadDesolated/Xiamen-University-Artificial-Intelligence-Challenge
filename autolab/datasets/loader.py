@@ -8,10 +8,11 @@ import pandas as pd
 
 from .. import config
 from ..schemas import ValidationError
-from .synthetic import make_t1
+from .synthetic import make_t1, make_t1_shift
 
 SYNTHETIC_FACTORIES = {
     "t1": make_t1,
+    "t1_shift": make_t1_shift,
 }
 
 

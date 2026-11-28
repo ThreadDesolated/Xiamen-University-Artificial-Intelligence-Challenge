@@ -179,6 +179,16 @@ def run_cv(
         fold_sizes.append({"fold": k + 1, "train": int(len(X_tr_fit)), "test": int(len(X_te))})
 
     values = np.asarray(metric_values, dtype=float)
+    train_array = np.asarray(train_values, dtype=float)
+    # 非有限指标必须当成执行失败：直接让 NaN 流进结果，会让 trace 失效（JSON 不支持 NaN），
+    # 面板上执行步骤被整条丢弃，看起来就像"实验不执行"。
+    if not np.all(np.isfinite(values)) or not np.all(np.isfinite(train_array)):
+        bad_folds = [i + 1 for i, value in enumerate(values) if not np.isfinite(value)]
+        where = f"第 {bad_folds[0]} 折" if bad_folds else "训练折"
+        raise RuntimeError(
+            f"模型训练发散：{where} {metric}=NaN/Inf，通常是学习率过大或特征量纲差异过大；"
+            "下一轮请降低学习率、增加 scale_standard 或减少训练轮数"
+        )
     result = {
         "metrics": {
             metric: Metrics(
@@ -203,9 +213,12 @@ def run_cv(
     if X_holdout is not None and y_holdout is not None:
         final_pipe, final_model, _, _ = _fit_final(X_cv, y_cv)
         pred = final_model.predict(final_pipe.transform(X_holdout))
+        holdout_value = float(compute(metric, y_holdout, pred))
+        if not np.isfinite(holdout_value):
+            raise RuntimeError(f"留出集评估得到 {metric}=NaN/Inf，模型输出不稳定")
         result["holdout"] = {
             "metric": metric,
-            "value": round(float(compute(metric, y_holdout, pred)), 6),
+            "value": round(holdout_value, 6),
             "n_samples": int(len(y_holdout)),
             "n_train_samples": int(len(X_cv)),
             "ratio": round(float(len(y_holdout) / len(y)), 4),

@@ -8,9 +8,9 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-# 各特征的中心与尺度：x0–x3 承载真实信号，但量纲差异大；x4–x7 为噪声列
-_LOC = np.array([2.0, -1.0, 0.5, 3.0, 0.0, 0.0, 0.0, 0.0], dtype=float)
-_SCALE = np.array([0.15, 0.8, 0.04, 1.2, 1.0, 1.0, 1.0, 1.0], dtype=float)
+# 各特征的中心与尺度：x0–x3 承载真实信号，但量纲差异大；x4–x11 为噪声列
+_LOC = np.array([2.0, -1.0, 0.5, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=float)
+_SCALE = np.array([0.15, 0.8, 0.04, 1.2, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=float)
 
 
 def make_t1(
@@ -40,3 +40,26 @@ def make_t1(
         mask = rng.random(n_rows) < missing_ratio
         df.loc[mask, col] = np.nan
     return df
+
+
+def make_t1_shift(
+    n_rows: int = 1400,
+    n_features: int = 12,
+    positive_ratio: float = 0.2,
+    missing_ratio: float = 0.04,
+    noise: float = 0.55,
+    seed: int = 2026,
+) -> pd.DataFrame:
+    """与 `make_t1` 同任务类型、画像相近但指纹不同的数据集。
+
+    用于演示**跨任务配方迁移**：先跑 t1_demo 沉淀配方，再跑 t1_shift，
+    画像相似度达到门槛时直接复用历史方案，首轮达标。
+    """
+    return make_t1(
+        n_rows=n_rows,
+        n_features=n_features,
+        positive_ratio=positive_ratio,
+        missing_ratio=missing_ratio,
+        noise=noise,
+        seed=seed,
+    )

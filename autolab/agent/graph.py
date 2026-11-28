@@ -15,12 +15,13 @@ from ..datasets.loader import load_dataframe
 from ..profile import profile_dataframe, profile_hash
 from ..report import env_info, export_bundle
 from ..sandbox.executor import execute_plan
-from ..sandbox.validate import validate_or_fallback
+from ..sandbox.validate import validate_or_fallback, validate_plan
 from ..schemas import ExperimentPlan, ExperimentResult, TaskSpec, new_id
 from ..store import db
 from ..tracing import TraceWriter
-from .attributor import attribute, evaluate_target, replan
-from .planner import llm_plan, plan_from_recipe, template_plan
+from ..transfer import find_transfer_recipe
+from .attributor import attribute, evaluate_target, llm_attribute, replan
+from .planner import llm_plan, plan_from_recipe, plan_rationale, template_plan
 
 DEFAULT_MAX_ROUNDS = 3
 
@@ -45,8 +46,10 @@ def run_agent(
     use_llm: bool = True,
     max_rounds: int | None = None,
     recipe_lookup: bool = True,
+    transfer_lookup: bool = True,
     run_id: str | None = None,
     fixed_plan=None,
+    goal: dict | None = None,
 ) -> dict:
     """跑一次完整闭环，返回 summary dict（同时落库、落 trace、导出报告）。"""
     config.ensure_dirs()
@@ -81,10 +84,27 @@ def run_agent(
         "error": "",
         "planner_source": "",
         "recipe_hit": False,
+        "recipe_transfer": False,
+        "transfer": None,
+        "goal": goal or {},
         "trace_path": str(trace.path),
     }
 
     try:
+        # 0) 自然语言目标（可选）：把"一句话目标"的解析结果写进 trace ----------
+        if goal:
+            trace.emit(
+                "goal",
+                tool="goal.parse",
+                input={"text": goal.get("text", "")},
+                output={
+                    "threshold": goal.get("threshold"),
+                    "budget_seconds": goal.get("budget_seconds"),
+                    "max_rounds": goal.get("max_rounds"),
+                    "applied": goal.get("applied") or {},
+                },
+            )
+
         # 1) 数据加载 ------------------------------------------------------
         df = load_dataframe(task.data_path, task.target)
         trace.emit(
@@ -122,29 +142,57 @@ def run_agent(
             plan.source = "reproduce"
             rounds_allowed = 1
             summary["planner_source"] = "reproduce"
-            trace.emit("plan", tool="planner.reproduce", input={"source": "saved_plan"}, output=plan.to_dict())
+            trace.emit(
+                "plan",
+                tool="planner.reproduce",
+                input={"source": "saved_plan"},
+                output={"plan": plan.to_dict(), "rationale": plan_rationale(plan, profile, task)},
+            )
         else:
             if recipe_lookup:
                 recipe = db.find_recipe(task.task_type, phash)
+                match = "exact" if recipe else ""
+                if recipe is None and transfer_lookup:
+                    # 同画像没命中：放宽到"结构相似"的历史方案（跨任务迁移）
+                    recipe = find_transfer_recipe(
+                        task.task_type, profile, exclude_profile_hash=phash
+                    )
+                    match = "similar" if recipe else ""
                 if recipe:
-                    plan = plan_from_recipe(recipe, task)
+                    plan = plan_from_recipe(recipe, task, source="transfer" if match == "similar" else "recipe")
                     summary["recipe_hit"] = True
-                    summary["planner_source"] = "recipe"
+                    summary["planner_source"] = plan.source
+                    if match == "similar":
+                        summary["recipe_transfer"] = True
+                        summary["transfer"] = {
+                            "source_task_id": recipe.get("task_id") or "",
+                            "source_recipe_id": recipe["recipe_id"],
+                            "similarity": recipe.get("similarity"),
+                            "metric_name": recipe["metric_name"],
+                            "metric_value": recipe["metric_value"],
+                        }
                     trace.emit(
                         "recipe_hit",
                         tool="store.find_recipe",
                         input={"task_type": task.task_type, "profile_hash": phash},
                         output={
+                            "match": match,
                             "recipe_id": recipe["recipe_id"],
                             "metric_name": recipe["metric_name"],
                             "metric_value": recipe["metric_value"],
+                            "source_task_id": recipe.get("task_id") or "",
+                            "similarity": recipe.get("similarity"),
                         },
                     )
             if plan is None and use_llm:
                 try:
                     plan = llm_plan(profile, task, whitelist)
+                    errors = validate_plan(plan, task, whitelist)
+                    if errors:
+                        raise ValueError("；".join(errors[:3]))
                     summary["planner_source"] = "llm"
                 except Exception as exc:  # noqa: BLE001 - 规划失败必须能降级
+                    plan = None
                     trace.emit(
                         "plan_fallback",
                         tool="planner.llm_plan",
@@ -157,7 +205,7 @@ def run_agent(
                 "plan",
                 tool=f"planner.{plan.source}",
                 input={"task": task.task_id, "profile_hash": phash},
-                output=plan.to_dict(),
+                output={"plan": plan.to_dict(), "rationale": plan_rationale(plan, profile, task)},
             )
 
         # 4) 执行 → 评估 → 归因 → 重规划 循环 ------------------------------
@@ -223,16 +271,33 @@ def run_agent(
                 break
 
             # 未达标：归因 → 入库 → 重规划
-            causes = attribute(profile, final_plan, result, task)
+            attribution_source = "rules"
+            attribution_summary = ""
+            if use_llm:
+                try:
+                    causes, attribution_summary = llm_attribute(profile, final_plan, result, task)
+                    attribution_source = "llm"
+                except Exception as exc:  # noqa: BLE001 - 模型不可用/不合规时回退规则库
+                    trace.emit(
+                        "attribute_fallback",
+                        tool="attributor.llm_attribute",
+                        output={"error": f"{type(exc).__name__}: {exc}"[:500], "fallback": "rules"},
+                    )
+                    causes = attribute(profile, final_plan, result, task)
+            else:
+                causes = attribute(profile, final_plan, result, task)
+            summary["attribution_source"] = attribution_source
             for cause in causes:
                 cause.round_idx = round_idx
                 db.save_attribution(run_id, round_idx, cause)
             summary["attributions"].extend(cause.to_dict() for cause in causes)
             trace.emit(
                 "attribute",
-                tool="attributor.attribute",
+                tool=f"attributor.{attribution_source}",
                 input={"round": round_idx, "status": result.status, "score": score},
                 output={
+                    "source": attribution_source,
+                    "summary": attribution_summary,
                     "causes": [
                         {
                             "cause": cause.cause,
@@ -241,20 +306,38 @@ def run_agent(
                             "fix": cause.fix,
                         }
                         for cause in causes
-                    ]
+                    ],
                 },
             )
 
             if round_idx >= rounds_allowed:
                 break
 
-            final_plan = replan(final_plan, causes, task)
-            trace.emit(
-                "replan",
-                tool="attributor.replan",
-                input={"round": round_idx, "causes": [c.cause for c in causes]},
-                output=final_plan.to_dict(),
-            )
+            candidate = replan(final_plan, causes, task)
+            errors = validate_plan(candidate, task, whitelist)
+            if errors:
+                # 归因建议合并后可能互相冲突（例如把线性模型的 l2 带到随机森林上）。
+                # 此时保留上一轮合法方案继续，避免 validate_or_fallback 退回模板、
+                # 把上一轮已经拿到的指标直接打回起点。
+                trace.emit(
+                    "plan_invalid",
+                    tool="attributor.replan",
+                    input={"round": round_idx, "causes": [c.cause for c in causes]},
+                    output={
+                        "valid": False,
+                        "errors": errors[:5],
+                        "fallback": "previous_plan",
+                        "fallback_plan_id": final_plan.plan_id,
+                    },
+                )
+            else:
+                final_plan = candidate
+                trace.emit(
+                    "replan",
+                    tool="attributor.replan",
+                    input={"round": round_idx, "causes": [c.cause for c in causes]},
+                    output=final_plan.to_dict(),
+                )
 
         # 5) 汇总、落库、配方沉淀 -----------------------------------------
         summary["plan"] = (final_plan if best_plan is None else final_plan).to_dict()
@@ -271,6 +354,8 @@ def run_agent(
                 task.metric,
                 summary["final_metric"] or 0.0,
                 notes=f"{task.task_id} / {summary['planner_source']}",
+                task_id=task.task_id,
+                profile=profile,
             )
         db.save_run(
             {

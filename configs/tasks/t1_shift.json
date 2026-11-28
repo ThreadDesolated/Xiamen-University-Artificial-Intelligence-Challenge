@@ -1,0 +1,15 @@
+{
+  "task_id": "t1_shift",
+  "name": "内置合成任务 B：同类表格二分类（特征更宽、分布不同）",
+  "task_type": "binary_classification",
+  "data_path": "synthetic:t1_shift",
+  "target": "label",
+  "metric": "accuracy",
+  "threshold": 0.85,
+  "higher_is_better": true,
+  "n_splits": 5,
+  "seed": 42,
+  "budget_seconds": 60,
+  "max_rounds": 3,
+  "notes": "跨任务迁移演示：与 t1_demo 同任务类型、画像相近但指纹不同；先跑 t1_demo 沉淀配方，再跑本任务看配方迁移"
+}

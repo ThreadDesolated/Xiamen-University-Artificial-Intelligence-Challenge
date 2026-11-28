@@ -27,6 +27,7 @@ EXPECTED_PATHS = {
     "/api/runs/{run_id}/trace",
     "/api/runs/{run_id}/report",
     "/api/runs/{run_id}/stream",
+    "/api/plan/preview",
 }
 
 
@@ -64,6 +65,8 @@ class RunRequestTest(_ServingTestBase):
         self.assertFalse(req.use_llm)
         self.assertIsNone(req.max_rounds)
         self.assertTrue(req.recipe_lookup)
+        self.assertTrue(req.transfer_lookup)
+        self.assertEqual(req.goal, "")
 
     def test_task_id_required(self) -> None:
         from pydantic import ValidationError
@@ -145,6 +148,87 @@ class StreamEndpointTest(_ServingTestBase):
     def test_missing_trace_returns_404(self) -> None:
         resp = self.client.get("/api/runs/__no_such_run__/stream")
         self.assertEqual(resp.status_code, 404)
+
+
+class PlanPreviewTest(_ServingTestBase):
+    """POST /api/plan/preview：选任务/改目标时返方案草案与规划说明，不执行实验。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError as exc:  # 未安装 httpx：跳过请求级用例
+            raise unittest.SkipTest(str(exc))
+        cls.client = TestClient(cls.app)
+
+    def test_unknown_task_returns_404(self) -> None:
+        resp = self.client.post("/api/plan/preview", json={"task_id": "no_such_task"})
+        self.assertEqual(resp.status_code, 404, resp.text[:300])
+
+    def test_preview_returns_plan_and_rationale(self) -> None:
+        resp = self.client.post("/api/plan/preview", json={"task_id": "t1_demo"})
+        self.assertEqual(resp.status_code, 200, resp.text[:500])
+        body = resp.json()
+        self.assertEqual(body["task_id"], "t1_demo")
+        self.assertIn("model", body["plan"])
+        self.assertTrue(body["rationale"], "方案卡需要每一步的规划理由")
+        self.assertIn("match", body["recipe"])
+        self.assertIsNotNone(body["profile_hash"])
+
+    def test_goal_overrides_threshold_and_rounds(self) -> None:
+        resp = self.client.post(
+            "/api/plan/preview",
+            json={"task_id": "t1_demo", "goal": "准确率 0.9 以上，最多 2 轮"},
+        )
+        self.assertEqual(resp.status_code, 200, resp.text[:500])
+        body = resp.json()
+        self.assertEqual(body["task"]["threshold"], 0.9)
+        self.assertEqual(body["task"]["max_rounds"], 2)
+        self.assertEqual(body["goal"]["applied"], {"threshold": 0.9, "max_rounds": 2})
+
+
+class RunStartPrecreatesTraceTest(unittest.TestCase):
+    """回归：面板在 POST 返回后立刻连 SSE，不能因为 trace 尚未创建而 404。
+
+    历史现象：前端先到、工作线程后创建 trace，SSE 返回 404；浏览器对非 200 的
+    EventSource 不会自动重连，页面永远停在"正在连接实时事件流…"。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        try:
+            from autolab.serving.server import create_app
+            from fastapi.testclient import TestClient
+        except ImportError as exc:
+            raise unittest.SkipTest(str(exc))
+        cls.tmp = pathlib.Path(tempfile.mkdtemp(prefix="autolab_precreate_"))
+        cls._patches = [
+            mock.patch.object(config, "TRACE_DIR", cls.tmp / "traces"),
+            mock.patch.object(config, "REPORT_DIR", cls.tmp / "reports"),
+            mock.patch.object(config, "DB_PATH", cls.tmp / "autolab.sqlite3"),
+        ]
+        for patch in cls._patches:
+            patch.start()
+        cls.client = TestClient(create_app())
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        for patch in cls._patches:
+            patch.stop()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_trace_exists_right_after_submit_and_stream_completes(self) -> None:
+        resp = self.client.post("/api/runs", json={"task_id": "t1_demo", "recipe_lookup": False})
+        self.assertEqual(resp.status_code, 200, resp.text[:300])
+        run_id = resp.json()["run_id"]
+
+        trace = config.TRACE_DIR / run_id / "trace.jsonl"
+        self.assertTrue(trace.exists(), "提交运行时就应预创建 trace，消除 SSE 首连竞态")
+
+        stream = self.client.get(f"/api/runs/{run_id}/stream")
+        self.assertEqual(stream.status_code, 200, stream.text[:300])
+        self.assertIn('"node": "done"', stream.text)
 
 
 class DeleteRunTest(unittest.TestCase):

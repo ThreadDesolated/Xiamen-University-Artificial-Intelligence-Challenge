@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from typing import Any
 
 import pandas as pd
@@ -139,3 +140,63 @@ def profile_hash(profile: dict) -> str:
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+
+
+#: 跨任务迁移的相似度门槛：低于该值不复用配方（宁可重新规划，也不乱套历史方案）
+TRANSFER_MIN_SIMILARITY = 0.6
+
+
+def profile_similarity(a: dict, b: dict) -> float:
+    """两个画像的结构相似度（0~1），用于**跨任务**配方迁移。
+
+    只比较与"方案是否适用"相关的结构维度，不比较列名与具体数值：
+    - 特征类型构成（类别特征占比差）
+    - 特征总数（相对差）
+    - 缺失比例（差值按 0.3 归一）
+    - 类别失衡比（对数距离）
+    - 数据规模（log1p 相对差）
+
+    任务类型不同直接返回 0：回归配方不能套到分类任务上。
+    """
+    type_a = (a.get("target") or {}).get("type")
+    type_b = (b.get("target") or {}).get("type")
+    if not type_a or type_a != type_b:
+        return 0.0
+
+    features_a = a.get("feature_types") or {}
+    features_b = b.get("feature_types") or {}
+    n_num_a, n_num_b = len(features_a.get("numeric") or []), len(features_b.get("numeric") or [])
+    n_cat_a, n_cat_b = len(features_a.get("categorical") or []), len(features_b.get("categorical") or [])
+    total_a, total_b = n_num_a + n_cat_a, n_num_b + n_cat_b
+    if not total_a or not total_b:
+        return 0.0
+
+    cat_ratio_a = n_cat_a / total_a
+    cat_ratio_b = n_cat_b / total_b
+    mix_sim = 1.0 - abs(cat_ratio_a - cat_ratio_b)
+
+    feature_sim = 1.0 - min(1.0, abs(total_a - total_b) / max(total_a, total_b))
+
+    missing_a = float(a.get("missing_ratio") or 0.0)
+    missing_b = float(b.get("missing_ratio") or 0.0)
+    missing_sim = 1.0 - min(1.0, abs(missing_a - missing_b) / 0.3)
+
+    imbalance_a = float((a.get("target") or {}).get("imbalance_ratio") or 1.0)
+    imbalance_b = float((b.get("target") or {}).get("imbalance_ratio") or 1.0)
+    imbalance_sim = 1.0 - min(
+        1.0,
+        abs(math.log(max(1.0, imbalance_a)) - math.log(max(1.0, imbalance_b))) / math.log(5.0),
+    )
+
+    rows_a = math.log1p(float(a.get("n_rows") or 0))
+    rows_b = math.log1p(float(b.get("n_rows") or 0))
+    rows_sim = 1.0 - min(1.0, abs(rows_a - rows_b) / max(rows_a, rows_b, 1e-9))
+
+    score = (
+        0.30 * mix_sim
+        + 0.20 * feature_sim
+        + 0.20 * missing_sim
+        + 0.15 * imbalance_sim
+        + 0.15 * rows_sim
+    )
+    return round(max(0.0, min(1.0, score)), 4)

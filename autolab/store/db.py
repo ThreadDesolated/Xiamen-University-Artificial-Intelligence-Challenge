@@ -36,7 +36,9 @@ CREATE TABLE IF NOT EXISTS recipes (
     metric_name  TEXT NOT NULL,
     metric_value REAL NOT NULL,
     created_at   REAL NOT NULL,
-    notes        TEXT DEFAULT ''
+    notes        TEXT DEFAULT '',
+    task_id      TEXT DEFAULT '',
+    profile_json TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS attributions (
@@ -77,10 +79,25 @@ def open_conn(db_path=None):
         conn.close()
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """旧库平滑升级：recipes 后来加了 task_id / profile_json（跨任务迁移用）。
+
+    SQLite 没有 `ADD COLUMN IF NOT EXISTS`，只能查 PRAGMA 后逐列补。
+    """
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(recipes)")}
+    for name, ddl in (
+        ("task_id", "TEXT DEFAULT ''"),
+        ("profile_json", "TEXT DEFAULT ''"),
+    ):
+        if name not in existing:
+            conn.execute(f"ALTER TABLE recipes ADD COLUMN {name} {ddl}")
+
+
 def init_db(db_path=None) -> pathlib.Path:
     path = pathlib.Path(db_path or config.DB_PATH)
     with open_conn(path) as conn:
         conn.executescript(_SCHEMA)
+        _migrate(conn)
     return path
 
 
@@ -154,24 +171,43 @@ def save_recipe(
     metric_value: float,
     notes: str = "",
     db_path=None,
+    *,
+    task_id: str = "",
+    profile: dict | None = None,
 ) -> str:
-    """把一个达标方案写进配方库（同画像同任务只保留指标最高的一条）。"""
+    """把一个达标方案写进配方库（同画像同任务只保留指标最高的一条）。
+
+    `task_id` / `profile` 用于跨任务迁移：旧记录没有这两列时也能照常工作，
+    命中旧记录且本次带了新信息时只补空列，不覆盖原有指标。
+    """
     init_db(db_path)
     plan_dict = plan.to_dict() if isinstance(plan, ExperimentPlan) else dict(plan)
+    profile_json = json.dumps(profile or {}, ensure_ascii=False)
     recipe_id = new_id("recipe")
     with open_conn(db_path) as conn:
         old = conn.execute(
-            "SELECT recipe_id, metric_value FROM recipes WHERE task_type=? AND profile_hash=?",
+            "SELECT recipe_id, metric_value, task_id, profile_json FROM recipes"
+            " WHERE task_type=? AND profile_hash=?",
             (task_type, profile_hash),
         ).fetchone()
         if old is not None and float(old["metric_value"]) >= float(metric_value):
+            # 已有更好的配方：只补齐迁移所需的画像/任务信息，不改指标
+            if (profile and not old["profile_json"]) or (task_id and not old["task_id"]):
+                conn.execute(
+                    "UPDATE recipes SET"
+                    " task_id=CASE WHEN task_id='' THEN ? ELSE task_id END,"
+                    " profile_json=CASE WHEN profile_json='' THEN ? ELSE profile_json END"
+                    " WHERE recipe_id=?",
+                    (task_id, profile_json, old["recipe_id"]),
+                )
             return str(old["recipe_id"])
         if old is not None:
             conn.execute("DELETE FROM recipes WHERE recipe_id=?", (old["recipe_id"],))
         conn.execute(
             "INSERT INTO recipes"
-            "(recipe_id, task_type, profile_hash, plan_json, metric_name, metric_value, created_at, notes)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(recipe_id, task_type, profile_hash, plan_json, metric_name, metric_value, created_at, notes,"
+            " task_id, profile_json)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 recipe_id,
                 task_type,
@@ -181,6 +217,8 @@ def save_recipe(
                 float(metric_value),
                 time.time(),
                 notes,
+                str(task_id or ""),
+                profile_json,
             ),
         )
     return recipe_id
@@ -191,9 +229,10 @@ def find_recipe(task_type: str, profile_hash: str, db_path=None) -> dict | None:
     path = pathlib.Path(db_path or config.DB_PATH)
     if not path.exists():
         return None
+    init_db(db_path)  # 旧库可能还没有 task_id 列，先补列再查
     with open_conn(db_path) as conn:
         row = conn.execute(
-            "SELECT recipe_id, plan_json, metric_name, metric_value, created_at"
+            "SELECT recipe_id, plan_json, metric_name, metric_value, created_at, task_id"
             " FROM recipes WHERE task_type=? AND profile_hash=? ORDER BY metric_value DESC LIMIT 1",
             (task_type, profile_hash),
         ).fetchone()
@@ -205,7 +244,50 @@ def find_recipe(task_type: str, profile_hash: str, db_path=None) -> dict | None:
         "metric_name": row["metric_name"],
         "metric_value": row["metric_value"],
         "created_at": row["created_at"],
+        "task_id": row["task_id"] or "",
     }
+
+
+def list_recipes(task_type: str | None = None, limit: int = 200, db_path=None) -> list[dict]:
+    """列出配方库（跨任务迁移的候选集）；profile_json 解析失败的行直接跳过。"""
+    path = pathlib.Path(db_path or config.DB_PATH)
+    if not path.exists():
+        return []
+    init_db(db_path)  # 旧库先补 task_id / profile_json 两列
+    sql = (
+        "SELECT recipe_id, task_type, profile_hash, plan_json, metric_name, metric_value,"
+        " created_at, notes, task_id, profile_json FROM recipes"
+    )
+    params: list = []
+    if task_type:
+        sql += " WHERE task_type=?"
+        params.append(task_type)
+    sql += " ORDER BY metric_value DESC LIMIT ?"
+    params.append(int(limit))
+    with open_conn(db_path) as conn:
+        rows = conn.execute(sql, params).fetchall()
+    recipes: list[dict] = []
+    for row in rows:
+        try:
+            plan = json.loads(row["plan_json"])
+            profile = json.loads(row["profile_json"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        recipes.append(
+            {
+                "recipe_id": row["recipe_id"],
+                "task_type": row["task_type"],
+                "profile_hash": row["profile_hash"],
+                "task_id": row["task_id"] or "",
+                "plan": plan,
+                "profile": profile,
+                "metric_name": row["metric_name"],
+                "metric_value": row["metric_value"],
+                "created_at": row["created_at"],
+                "notes": row["notes"] or "",
+            }
+        )
+    return recipes
 
 
 def save_attribution(run_id: str, round_idx: int, attribution, db_path=None) -> str:

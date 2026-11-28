@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .. import config
 from ..store import db
-from ..tracing import read_trace
+from ..tracing import json_safe, read_trace
 
 try:  # Web 依赖可选：未安装时本模块仍可导入，只有 create_app 会给出明确提示
     from pydantic import BaseModel
@@ -122,6 +122,15 @@ class RunRequest(BaseModel):
     use_llm: bool = False
     max_rounds: int | None = None
     recipe_lookup: bool = True
+    transfer_lookup: bool = True
+    goal: str = ""
+
+
+class PlanPreviewRequest(BaseModel):
+    """POST /api/plan/preview 的请求体：任务 + 可选的一句话目标。"""
+
+    task_id: str
+    goal: str = ""
 
 
 class BatchDeleteRequest(BaseModel):
@@ -156,7 +165,12 @@ def create_app():
         ) from exc
 
     from ..agent.graph import run_agent
-    from ..schemas import TaskSpec
+    from ..agent.planner import plan_rationale, template_plan
+    from ..datasets.loader import load_dataframe
+    from ..goal import apply_goal, parse_goal
+    from ..profile import profile_dataframe, profile_hash
+    from ..schemas import TaskSpec, ValidationError
+    from ..transfer import find_transfer_recipe
 
     app = FastAPI(title="AutoLab", version="0.1.0")
     from fastapi.staticfiles import StaticFiles
@@ -181,16 +195,80 @@ def create_app():
     runs: dict[str, dict] = {}
     lock = threading.Lock()
 
-    def _run_async(run_id: str, task: TaskSpec, use_llm: bool, max_rounds, recipe_lookup: bool) -> None:
-        summary = run_agent(
-            task,
-            use_llm=use_llm,
-            max_rounds=max_rounds,
-            recipe_lookup=recipe_lookup,
-            run_id=run_id,
-        )
+    def _run_async(
+        run_id: str,
+        task: TaskSpec,
+        use_llm: bool,
+        max_rounds,
+        recipe_lookup: bool,
+        transfer_lookup: bool,
+        goal: dict | None,
+    ) -> None:
+        trace_path = config.TRACE_DIR / run_id / "trace.jsonl"
+        try:
+            summary = run_agent(
+                task,
+                use_llm=use_llm,
+                max_rounds=max_rounds,
+                recipe_lookup=recipe_lookup,
+                transfer_lookup=transfer_lookup,
+                run_id=run_id,
+                goal=goal,
+            )
+        except Exception as exc:  # noqa: BLE001 - 线程内异常必须落成结构化的 error 状态
+            # run_agent 在创建 trace 之前就抛异常时（例如数据库被占用），必须自己收尾：
+            # 否则内存里的 run 永远停在 running，前端和 SSE 都会一直等。
+            import traceback
+
+            traceback.print_exc()
+            summary = {
+                "run_id": run_id,
+                "task_id": task.task_id,
+                "task_name": task.name,
+                "task_type": task.task_type,
+                "status": "error",
+                "passed": False,
+                "rounds_used": 0,
+                "error": f"{type(exc).__name__}: {exc}",
+                "trace_path": str(trace_path),
+            }
+            try:
+                event = {
+                    "run_id": run_id,
+                    "seq": 1,
+                    "ts": round(time.time(), 4),
+                    "node": "done",
+                    "tool": "",
+                    "input": None,
+                    "output": {
+                        "status": "error",
+                        "passed": False,
+                        "rounds": 0,
+                        "error": summary["error"],
+                    },
+                    "duration_ms": None,
+                }
+                with open(trace_path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+            except OSError:
+                pass
+            try:
+                db.save_run(
+                    {
+                        "run_id": run_id,
+                        "task_id": task.task_id,
+                        "task_type": task.task_type,
+                        "status": "error",
+                        "rounds": 0,
+                        "best_metric": None,
+                        "plan": {},
+                        "trace_path": str(trace_path),
+                    }
+                )
+            except Exception:  # noqa: BLE001
+                pass
         with lock:
-            runs[run_id] = summary
+            runs[run_id] = json_safe(summary)
 
     @app.get("/api/health")
     def health() -> dict:
@@ -214,16 +292,111 @@ def create_app():
             task = TaskSpec.from_dict(config.load_task_config(req.task_id)).validate()
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail=f"任务不存在: {req.task_id}")
+        goal_payload = parse_goal(req.goal) if (req.goal or "").strip() else None
+        if goal_payload:
+            try:
+                task = apply_goal(task, goal_payload)
+            except ValidationError as exc:
+                raise HTTPException(status_code=400, detail=f"目标解析结果不合法: {exc}")
         run_id = f"run_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        # 先建好空的 trace 文件：POST 一返回前端就立刻连 SSE，而工作线程可能还没跑到
+        # TraceWriter；不预建会出现"前端先到、轨迹后建"的竞态，SSE 返回 404 后
+        # 浏览器不会自动重连，面板就会永远停在"正在连接实时事件流…"。
+        trace_dir = config.TRACE_DIR / run_id
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        (trace_dir / "trace.jsonl").touch(exist_ok=True)
         with lock:
-            runs[run_id] = {"run_id": run_id, "status": "running", "task_id": req.task_id}
+            runs[run_id] = {
+                "run_id": run_id,
+                "status": "running",
+                "task_id": req.task_id,
+                "goal": goal_payload,
+            }
         thread = threading.Thread(
             target=_run_async,
-            args=(run_id, task, req.use_llm, req.max_rounds, req.recipe_lookup),
+            args=(
+                run_id,
+                task,
+                req.use_llm,
+                req.max_rounds,
+                req.recipe_lookup,
+                req.transfer_lookup,
+                goal_payload,
+            ),
             daemon=True,
         )
         thread.start()
-        return {"run_id": run_id, "status": "running", "trace": f"/api/runs/{run_id}/trace"}
+        return {
+            "run_id": run_id,
+            "status": "running",
+            "goal": goal_payload,
+            "trace": f"/api/runs/{run_id}/trace",
+        }
+
+    @app.post("/api/plan/preview")
+    def preview_plan(req: PlanPreviewRequest) -> dict:
+        """规划预览：按画像产出方案草案与迁移候选，不执行实验。
+
+        面板在选任务/改目标时调用，用来展示「为什么这么规划」；
+        返回结构与跑完后的 trace 对齐（plan + rationale），便于前端复用渲染。
+        """
+        try:
+            task = TaskSpec.from_dict(config.load_task_config(req.task_id)).validate()
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"任务不存在: {req.task_id}")
+        except (ValidationError, ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=f"任务配置不合法: {exc}")
+        goal_payload = parse_goal(req.goal) if (req.goal or "").strip() else None
+        if goal_payload:
+            try:
+                task = apply_goal(task, goal_payload)
+            except ValidationError as exc:
+                raise HTTPException(status_code=400, detail=f"目标解析结果不合法: {exc}")
+        try:
+            frame = load_dataframe(task.data_path, task.target)
+            profile = profile_dataframe(frame, task.target, task.task_type)
+        except Exception as exc:  # noqa: BLE001 - 数据缺失/格式错误要给前端可读提示
+            raise HTTPException(status_code=400, detail=f"数据不可用：{exc}")
+
+        phash = profile_hash(profile)
+        plan = template_plan(profile, task)
+        recipe: dict = {"match": "none"}
+        exact = db.find_recipe(task.task_type, phash)
+        if exact:
+            recipe = {
+                "match": "exact",
+                "recipe_id": exact["recipe_id"],
+                "source_task_id": exact.get("task_id", ""),
+                "metric_name": exact["metric_name"],
+                "metric_value": exact["metric_value"],
+            }
+        else:
+            candidate = find_transfer_recipe(task.task_type, profile, exclude_profile_hash=phash)
+            if candidate:
+                recipe = {
+                    "match": "similar",
+                    "recipe_id": candidate["recipe_id"],
+                    "source_task_id": candidate.get("task_id", ""),
+                    "metric_name": candidate["metric_name"],
+                    "metric_value": candidate["metric_value"],
+                    "similarity": candidate["similarity"],
+                }
+        return {
+            "task_id": task.task_id,
+            "task": task.to_dict(),
+            "goal": goal_payload,
+            "profile_hash": phash,
+            "profile": {
+                "n_rows": profile.get("n_rows"),
+                "n_features": profile.get("n_features"),
+                "missing_ratio": profile.get("missing_ratio"),
+                "feature_types": profile.get("feature_types"),
+                "warnings": profile.get("warnings"),
+            },
+            "plan": plan.to_dict(),
+            "rationale": plan_rationale(plan, profile, task),
+            "recipe": recipe,
+        }
 
     @app.get("/api/runs/{run_id}")
     def get_run(run_id: str) -> dict:
@@ -339,7 +512,8 @@ def create_app():
           `Last-Event-ID`，服务端据此续推，不会重复也不会漏；
         - 空闲时每 15 秒发一个 `: ping` 注释帧，防止中间代理/网关掐断；
         - 响应头带 no-cache / X-Accel-Buffering: no，避免被缓冲成"卡住不动"；
-        - trace 文件还没生成时返回 404，前端等 200ms 重试即可。
+        - 新建 run 在 POST 返回前就预创建了空 trace 文件，正常不会 404；
+          只有 run 完全不存在（或轨迹被删）才返回 404，前端需自行回退到轮询。
         """
         path = config.TRACE_DIR / run_id / "trace.jsonl"
         if not path.exists():

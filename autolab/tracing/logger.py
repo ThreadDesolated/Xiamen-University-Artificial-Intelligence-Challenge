@@ -8,12 +8,29 @@
 from __future__ import annotations
 
 import json
+import math
 import pathlib
 import threading
 import time
 from typing import Any, Callable
 
 from ..schemas import TraceEvent
+
+
+def json_safe(value: Any) -> Any:
+    """递归把 NaN / Infinity 换成 None。
+
+    JSON 标准不支持非有限浮点数：trace 一旦写入 `NaN`，浏览器 `JSON.parse`
+    会整行失败，SSE 事件被静默丢弃，面板看起来就像"实验没有执行"。
+    在写盘和读盘两端都做一次清洗，历史坏数据也能正常回放。
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {str(key): json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    return value
 
 
 def _safe(value: Any, limit: int = 4000) -> Any:
@@ -61,7 +78,8 @@ class TraceWriter:
                 output=_safe(output),
                 duration_ms=None if duration_ms is None else round(float(duration_ms), 2),
             ).to_dict()
-            self._fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+            event = json_safe(event)
+            self._fh.write(json.dumps(event, ensure_ascii=False, allow_nan=False) + "\n")
             self._fh.flush()
         for callback in list(self._subscribers):
             try:
@@ -99,7 +117,7 @@ def read_trace(path) -> list[dict]:
             if not line:
                 continue
             try:
-                events.append(json.loads(line))
+                events.append(json_safe(json.loads(line)))
             except json.JSONDecodeError:
                 continue
     return events

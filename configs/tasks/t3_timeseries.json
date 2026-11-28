@@ -5,11 +5,11 @@
   "data_path": "data/processed/t3_timeseries.csv",
   "target": "target",
   "metric": "mae",
-  "threshold": 0.15,
+  "threshold": 0.45,
   "higher_is_better": false,
   "n_splits": 5,
   "seed": 42,
   "budget_seconds": 120,
   "max_rounds": 3,
-  "notes": "先运行 python -m autolab prepare --task t3_timeseries"
+  "notes": "先运行 python -m autolab prepare --task t3_timeseries。阈值按 5 折交叉验证实测标定：linear_gd 三轮 mae=0.4353/0.4324/0.4321（折间标准差 0.014–0.018），取 0.45≈均值+1σ，约为均值预测器 0.787 的 57%，原 0.15 在数据上不可达"
 }

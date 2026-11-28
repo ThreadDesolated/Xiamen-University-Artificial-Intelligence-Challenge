@@ -72,6 +72,16 @@ def print_summary(summary: dict) -> None:
         print(f"  留出集复验: {holdout.get('metric')}={holdout.get('value'):.4f}"
               f"（{holdout.get('n_samples')} 行，不参与达标判定）")
     print(f"  配方命中: {summary.get('recipe_hit')}   trace: {summary.get('trace_path')}")
+    transfer = summary.get("transfer") or {}
+    if summary.get("recipe_transfer"):
+        print(
+            f"  跨任务迁移: 来源 {transfer.get('source_task_id') or transfer.get('source_recipe_id')}"
+            f"  相似度 {transfer.get('similarity')}  来源指标 {transfer.get('metric_name')}"
+            f"={transfer.get('metric_value')}"
+        )
+    goal = summary.get("goal") or {}
+    if goal.get("text"):
+        print(f"  目标解析: {goal.get('text')} -> {goal.get('applied') or '未识别到数值约束'}")
     if summary.get("report_md"):
         print(f"  报告: {summary.get('report_md')}")
     if summary.get("bundle_path"):
@@ -164,13 +174,22 @@ def _cmd_run(args) -> int:
     else:
         print("需要 --task 或 --plan latest 参数", file=sys.stderr)
         return 2
+    goal_payload = None
+    if getattr(args, "goal", ""):
+        from .goal import apply_goal, parse_goal
+
+        goal_payload = parse_goal(args.goal)
+        task = apply_goal(task, goal_payload)
+        print(f"目标解析: {goal_payload.get('applied') or '未识别到数值约束'}")
     summary = run_agent(
         task,
         use_llm=bool(args.llm),
         recipe_lookup=not args.no_recipe and fixed_plan is None,
+        transfer_lookup=not getattr(args, "no_transfer", False) and fixed_plan is None,
         max_rounds=args.max_rounds,
         run_id=args.run_id,
         fixed_plan=fixed_plan,
+        goal=goal_payload,
     )
     print_summary(summary)
     return 0 if summary.get("status") in ("passed", "failed") else 1
@@ -584,6 +603,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--max-rounds", type=int, default=None)
     run.add_argument("--llm", action="store_true", help="启用大模型规划（需 DEEPSEEK_API_KEY）")
     run.add_argument("--no-recipe", action="store_true", help="跳过配方库检索")
+    run.add_argument("--no-transfer", action="store_true", help="不做跨任务配方迁移（只用同画像配方）")
+    run.add_argument("--goal", default="", help="一句话目标，如：准确率做到 0.86 以上，预算 90 秒，最多 2 轮")
     run.add_argument("--plan", default=None, help="按保存的方案 JSON 原样复现")
     run.add_argument("--run-id", default=None)
     run.set_defaults(func=_cmd_run)

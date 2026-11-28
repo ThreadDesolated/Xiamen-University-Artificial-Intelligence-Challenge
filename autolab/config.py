@@ -53,6 +53,9 @@ SUPPORTED_METRICS = {
     "multiclass_classification": ("accuracy", "f1_macro"),
     "regression": ("mae", "rmse", "r2"),
 }
+#: 这些指标越小越好；其余（accuracy / f1_macro / r2）越大越好。
+#: 任务配置的 higher_is_better 必须与指标方向一致，避免"阈值口径"被配反。
+LOWER_IS_BETTER_METRICS = ("mae", "rmse")
 
 
 def load_whitelist() -> dict:
